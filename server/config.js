@@ -15,6 +15,12 @@ const SPARKS_SECRETS_PATH =
 /** AES key file (auto-generated if SPARKDASH_SECRETS_KEY unset). */
 const SECRETS_KEY_PATH =
   process.env.SECRETS_KEY_PATH || path.join(ROOT, "config", ".secrets-key");
+/** Model-setup registry (declarative launch/stop/status commands per fleet config). */
+const MODEL_SETUPS_PATH =
+  process.env.MODEL_SETUPS_PATH || path.join(ROOT, "config", "model-setups.json");
+/** Directory where per-switch job logs are written (see SetupManager). */
+const SETUP_LOGS_DIR =
+  process.env.SETUP_LOGS_DIR || path.join(ROOT, "config", "setup-logs");
 
 // ─── LLM probe timeout ──────────────────────────────────
 const LLM_PROBE_TIMEOUT_MS = 3000;
@@ -76,6 +82,8 @@ export {
   GPU_MEMORY_JSON_PATH,
   SPARKS_SECRETS_PATH,
   SECRETS_KEY_PATH,
+  MODEL_SETUPS_PATH,
+  SETUP_LOGS_DIR,
   LLM_PROBE_TIMEOUT_MS,
   SSH_CONNECT_TIMEOUT,
   POLL_INTERVAL_GPU,

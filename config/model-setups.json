@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "setups": [
+    {
+      "id": "mimo",
+      "name": "MiMo-V2.5 (dual)",
+      "description": "MiMo-V2.5 Omni · TP=2 over Ray across spark1 + spark2",
+      "sparks": ["spark1", "spark2"],
+      "startParallel": false,
+      "detect": { "localContainers": ["mimo-nvfp4"] },
+      "components": [
+        {
+          "id": "mimo",
+          "target": "local",
+          "cwd": "/home/eric/deploy/mimo",
+          "start": { "cmd": "bash", "args": ["start.sh"] },
+          "stop": { "cmd": "bash", "args": ["stop.sh"] },
+          "status": { "cmd": "bash", "args": ["start.sh", "--check"] },
+          "startTimeoutMs": 1200000,
+          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "MiMo" }]
+        }
+      ]
+    },
+    {
+      "id": "deepseek-v4",
+      "name": "DeepSeek V4 (dual)",
+      "description": "DeepSeek-V4-Flash · spark1 head + spark2 worker",
+      "sparks": ["spark1", "spark2"],
+      "startParallel": false,
+      "detect": { "localContainers": ["deepseek-v4-flash", "dspark"] },
+      "components": [
+        {
+          "id": "deepseek-v4",
+          "target": "local",
+          "start": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["status"] },
+          "startTimeoutMs": 1200000,
+          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-dspark" }]
+        }
+      ]
+    },
+    {
+      "id": "ornith-qwen",
+      "name": "Ornith + Qwen (OCR+Extract)",
+      "description": "Ornith-35B on spark1 · Qwen OCR+Extract on spark2",
+      "sparks": ["spark1", "spark2"],
+      "detect": { "localContainers": ["ornith-ornith-35b"] },
+      "components": [
+        {
+          "id": "ornith-qwen",
+          "target": "local",
+          "start": { "cmd": "/home/eric/ornith-qwen.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/ornith-qwen.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/ornith-qwen.sh", "args": ["status"] },
+          "startTimeoutMs": 900000,
+          "ready": [
+            { "host": "127.0.0.1", "port": 8000, "servedModel": "ornith-35b" },
+            { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
+            { "host": "192.168.10.114", "port": 8001, "servedModel": "qwen3.6-extract" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ds4-qwen",
+      "name": "DeepSeek V4 Flash + Qwen (OCR+Extract)",
+      "description": "DeepSeek-V4-Flash q2-imatrix single-node (300k ctx, in-RAM) on spark1 · Qwen OCR+Extract on spark2",
+      "sparks": ["spark1", "spark2"],
+      "detect": { "endpoint": { "host": "127.0.0.1", "port": 8000, "matchModel": "deepseek-v4" } },
+      "components": [
+        {
+          "id": "ds4-qwen",
+          "target": "local",
+          "start": { "cmd": "/home/eric/ds4-qwen.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/ds4-qwen.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/ds4-qwen.sh", "args": ["status"] },
+          "startTimeoutMs": 1200000,
+          "ready": [
+            { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" },
+            { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
+            { "host": "192.168.10.114", "port": 8001, "servedModel": "qwen3.6-extract" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "laguna-qwen",
+      "name": "Laguna + Qwen (OCR+Extract)",
+      "description": "Laguna-S-2.1 (DFlash spec-decode) on spark1 · Qwen OCR+Extract on spark2",
+      "sparks": ["spark1", "spark2"],
+      "detect": { "localContainers": ["laguna-s"] },
+      "components": [
+        {
+          "id": "laguna-qwen",
+          "target": "local",
+          "env": { "ENABLE_SPEC": "1" },
+          "start": { "cmd": "/home/eric/laguna-qwen.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/laguna-qwen.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/laguna-qwen.sh", "args": ["status"] },
+          "startTimeoutMs": 900000,
+          "ready": [
+            { "host": "127.0.0.1", "port": 8000, "servedModel": "laguna-s" },
+            { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
+            { "host": "192.168.10.114", "port": 8001, "servedModel": "qwen3.6-extract" }
+          ]
+        }
+      ]
+    }
+  ]
+}

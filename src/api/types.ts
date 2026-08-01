@@ -228,6 +228,15 @@ export interface SparkMetrics {
   llm: LlmMetrics[];
 }
 
+// ─── Running model on a node (from the active model setup) ─
+export interface RunningModel {
+  /** served model id (live) or the configured name */
+  model: string;
+  port: number;
+  /** true when the endpoint answers /v1/models (else starting/down) */
+  up: boolean;
+}
+
 // ─── Spark snapshot (server pushes this) ──────────────────
 export interface SparkSnapshot {
   id: string;
@@ -256,12 +265,16 @@ export interface SparkSnapshot {
   llmApiKeyPorts?: number[];
   hardware: HardwareInfo;
   metrics: SparkMetrics;
+  /** Models the active setup runs on this node, with live status. */
+  runningModels?: RunningModel[];
 }
 
 // ─── WebSocket envelope ───────────────────────────────────
 export interface WsSnapshot {
   type: "snapshot";
   sparks: SparkSnapshot[];
+  /** Model-setup state (present once the server is on a version that sends it). */
+  setup?: ModelSetupsState;
   refreshInterval: number;
 }
 
@@ -510,4 +523,35 @@ export interface ShowcaseListResponse {
 export interface ShowcaseStartResponse {
   sessionId: string;
   status: "running";
+}
+
+// ─── Model setups (start/stop/switch model configs) ───────
+export interface ModelSetup {
+  id: string;
+  name: string;
+  description: string;
+  /** Spark ids this setup occupies, e.g. ["spark1","spark2"]. */
+  sparks: string[];
+}
+
+export type ModelSetupPhase =
+  | "idle"
+  | "starting"
+  | "stopping"
+  | "running"
+  | "failed"
+  /** Detection could not run (e.g. docker unreachable) — active setup unknown. */
+  | "unknown";
+
+export interface ModelSetupsState {
+  setups: ModelSetup[];
+  /** id of the currently-running setup, or null when the fleet is idle. */
+  activeSetupId: string | null;
+  /** id being switched to during a transition, else null. */
+  targetSetupId?: string | null;
+  phase: ModelSetupPhase;
+  /** Non-null when detection/switching failed; message for the UI. */
+  error?: string | null;
+  /** Tail of the current/last switch job's stdout, for the live log view. */
+  log?: string[];
 }

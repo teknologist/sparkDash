@@ -2,6 +2,7 @@ import type {
   DecodeBenchJob,
   DecodeBenchListResponse,
   LlmMetrics,
+  ModelSetupsState,
   Settings,
   ShowcaseListResponse,
   ShowcaseSessionState,
@@ -337,4 +338,25 @@ export function updateSettings(patch: Partial<Settings>): Promise<Settings> {
     method: "PUT",
     body: JSON.stringify(patch),
   });
+}
+
+// ─── Model setups ─────────────────────────────────────────
+/** List model setups + which one is running (live state also arrives over WS). */
+export function fetchModelSetups(): Promise<ModelSetupsState> {
+  return apiFetch("/api/model-setups");
+}
+
+/** Switch to a setup: stops the active one, then starts this one (async on server). */
+export function activateModelSetup(id: string): Promise<{ success: boolean; started: boolean }> {
+  return apiFetch(`/api/model-setups/${id}/activate`, { method: "POST" });
+}
+
+/** Stop the active setup (fleet → idle). */
+export function stopModelSetup(): Promise<{ success: boolean }> {
+  return apiFetch("/api/model-setups/stop", { method: "POST" });
+}
+
+/** Cancel an in-flight switch. */
+export function cancelModelSetup(): Promise<{ success: boolean; cancelled: boolean }> {
+  return apiFetch("/api/model-setups/cancel", { method: "POST" });
 }

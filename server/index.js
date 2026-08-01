@@ -3,11 +3,13 @@ import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { spawn } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { SparkRegistry } from "./sparks/SparkRegistry.js";
 import { SparkMonitor } from "./sparks/SparkMonitor.js";
+import { SetupManager } from "./setups/SetupManager.js";
 import { sshExec, sshTest, llmTest } from "./collectors/ssh.js";
 import { validateSparkTarget, createRateLimiter } from "./validate.js";
 import { getSettings, updateSettings, loadSettings } from "./settings.js";
@@ -67,6 +69,9 @@ const registry = new SparkRegistry();
 // ─── Monitor map ─────────────────────────────────────────
 const monitors = new Map();
 
+// ─── Model-setup manager (start/stop/switch model configs) ─
+const setupManager = new SetupManager();
+
 // ─── Start monitor for a Spark ───────────────────────────
 function startMonitor(spark) {
   if (monitors.has(spark.id)) return;
@@ -105,6 +110,44 @@ function orderedSnapshots() {
     .map((id) => monitors.get(id))
     .filter(Boolean)
     .map((m) => m.snapshot());
+}
+
+// ─── Map a model-serving host to a Spark id ───────────────
+// Loopback resolves to the "head" Spark (the one running on this host); other
+// hosts match a Spark's lanIp/cx7Ip. Used to attach the active setup's running
+// models to the right node card.
+const _localIPs = new Set(
+  Object.values(os.networkInterfaces())
+    .flat()
+    .filter(Boolean)
+    .map((i) => i.address)
+);
+function headSparkId() {
+  for (const s of registry.sparks) {
+    if (_localIPs.has(s.lanIp) || (s.cx7Ip && _localIPs.has(s.cx7Ip))) return s.id;
+  }
+  return registry.sparkIds[0] || null;
+}
+function hostToSparkId(host) {
+  if (host === "127.0.0.1" || host === "localhost" || _localIPs.has(host)) return headSparkId();
+  for (const s of registry.sparks) {
+    if (s.lanIp === host || s.cx7Ip === host) return s.id;
+  }
+  return null;
+}
+/** Group the active setup's serving endpoints by Spark id → running-model list. */
+function runningModelsBySpark() {
+  const bySpark = {};
+  for (const m of setupManager.getActiveModels()) {
+    const id = hostToSparkId(m.host);
+    if (!id) continue;
+    (bySpark[id] ||= []).push({
+      model: m.modelId || m.servedModel,
+      port: m.port,
+      up: m.up,
+    });
+  }
+  return bySpark;
 }
 
 // ─── Express app ─────────────────────────────────────────
@@ -1069,6 +1112,45 @@ app.post("/api/sparks/:id/wake", async (req, res) => {
   }
 });
 
+// ─── Model setups (start/stop/switch model configs) ──────
+app.get("/api/model-setups", (_req, res) => {
+  res.json(setupManager.getState());
+});
+
+// Switch to a setup: stops the active one, then starts this one. Runs in the
+// background — progress is pushed over WS (setup state). Returns immediately.
+app.post("/api/model-setups/:id/activate", (req, res) => {
+  if (!setupManager.getSetup(req.params.id)) {
+    return res.status(404).json({ error: "Unknown model setup" });
+  }
+  if (setupManager.isBusy()) {
+    return res.status(409).json({ error: "A model switch is already in progress" });
+  }
+  if (setupManager.getState().phase === "unknown") {
+    return res.status(409).json({ error: "Model detection unavailable (docker unreachable) — cannot switch" });
+  }
+  setupManager.activate(req.params.id).catch((err) => {
+    console.error(`[model-setups] activate ${req.params.id} failed:`, err.message);
+  });
+  res.json({ success: true, started: true });
+});
+
+// Stop the active setup (fleet → idle). Background; progress over WS.
+app.post("/api/model-setups/stop", (_req, res) => {
+  if (setupManager.isBusy()) {
+    return res.status(409).json({ error: "A model switch is already in progress" });
+  }
+  setupManager.stop().catch((err) => {
+    console.error("[model-setups] stop failed:", err.message);
+  });
+  res.json({ success: true });
+});
+
+// Cancel the in-flight switch (kills the current step; cleans up to stopped).
+app.post("/api/model-setups/cancel", (_req, res) => {
+  res.json({ success: true, ...setupManager.cancel() });
+});
+
 // ─── Static files (built frontend) ───────────────────────
 const distDir = path.join(ROOT, "dist");
 const indexHtml = path.join(distDir, "index.html");
@@ -1104,9 +1186,13 @@ let _lastBroadcastPayload = null;
 
 /** Build the snapshot payload string. Centralized so broadcast + refresh share it. */
 function buildSnapshotPayload() {
+  const sparks = orderedSnapshots();
+  const byId = runningModelsBySpark();
+  for (const s of sparks) s.runningModels = byId[s.id] || [];
   return JSON.stringify({
     type: "snapshot",
-    sparks: orderedSnapshots(),
+    sparks,
+    setup: setupManager.snapshot(),
     refreshInterval: getSettings().pollIntervalMs,
   });
 }
@@ -1159,6 +1245,13 @@ function restartBroadcast() {
 
 // ─── Start ───────────────────────────────────────────────
 loadSettings();
+// Push a fresh snapshot immediately whenever the model-setup state changes
+// (phase transition or new log line) so switch progress streams live to the UI.
+setupManager.onChange = () => {
+  const payload = buildSnapshotPayload();
+  _lastBroadcastPayload = payload;
+  broadcastPayload(payload);
+};
 startBroadcast();
 
 server.listen(PORT, BIND_HOST, () => {
@@ -1180,6 +1273,7 @@ function shutdown(signal) {
     }
     for (const m of monitors.values()) m.stop();
     monitors.clear();
+    setupManager.dispose();
   } catch (err) {
     console.error("[sparkDash] error during shutdown:", err.message);
   }

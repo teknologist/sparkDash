@@ -17,6 +17,7 @@ export default defineConfig({
     watch: {
       usePolling: process.env.CHOKIDAR_USEPOLLING === "1",
     },
+    allowedHosts: ["spark1.pixiebob-dubhe.ts.net"],
     proxy: {
       "/api": "http://127.0.0.1:5555",
       "/ws": {

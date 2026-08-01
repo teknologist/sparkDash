@@ -269,6 +269,26 @@ function SparkCard({
             })()}
           </div>
 
+          {spark.runningModels && spark.runningModels.length > 0 && (
+            <div className="mt-3 border-t border-border pt-2.5">
+              <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">Models</div>
+              <div className="flex flex-wrap gap-1.5">
+                {spark.runningModels.map((m) => (
+                  <span
+                    key={`${m.model}-${m.port}`}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-elevated px-2 py-0.5 text-[10px] text-text"
+                    title={`port ${m.port} · ${m.up ? "serving" : "starting / not ready"}`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.up ? "bg-success" : "bg-warning animate-pulse"}`}
+                    />
+                    {m.model}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {(() => {
             const llmArr = spark.metrics.llm;
             const llm = Array.isArray(llmArr) ? llmArr.find((l) => l.available) : null;
