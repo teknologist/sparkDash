@@ -12,6 +12,8 @@ import { ThemeSwitch } from "./components/ThemeSwitch";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ModelSetupPill } from "./components/ModelSetupPill";
 import { ModelSwitchDialog } from "./components/ModelSwitchDialog";
+import { ModelComposerDialog } from "./components/ModelComposer/ModelComposerDialog";
+import { MemoryIcon } from "./components/ui/icons";
 import { GearIcon, BoltIcon } from "./components/ui/icons";
 import { OVERVIEW_ID } from "./constants";
 import type { Settings, SparkSnapshot } from "./api/types";
@@ -80,12 +82,14 @@ function placeholderSnapshot(
 }
 
 function DashboardApp() {
-  const { sparks, setupState, activeId, setActiveId, activeSpark, connected } = useSnapshot();
+  const { sparks, setupState, composerState, activeId, setActiveId, activeSpark, connected } =
+    useSnapshot();
   const navigate = useRoute(setActiveId);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
+  const [showComposer, setShowComposer] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   /** Used when WS is down so add/delete still updates the tab bar */
   const [fallbackSparks, setFallbackSparks] = useState<SparkSnapshot[]>([]);
@@ -228,6 +232,15 @@ function DashboardApp() {
             <ModelSetupPill state={setupState} onClick={() => setShowSetup(true)} />
             <button
               type="button"
+              onClick={() => setShowComposer(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-elevated px-3 py-1.5 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-text"
+              title="Compose models across nodes (RAM-aware)"
+            >
+              <MemoryIcon className="h-3.5 w-3.5 text-accent" />
+              Compose
+            </button>
+            <button
+              type="button"
               onClick={() => setShowSettings(true)}
               className="icon-circle"
               title="Settings"
@@ -294,6 +307,11 @@ function DashboardApp() {
         open={showSettings}
         onClose={() => setShowSettings(false)}
         onSaved={handleSettingsSaved}
+      />
+      <ModelComposerDialog
+        open={showComposer}
+        onClose={() => setShowComposer(false)}
+        state={composerState}
       />
       <ModelSwitchDialog
         open={showSetup}

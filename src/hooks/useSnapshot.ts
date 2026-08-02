@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { ModelSetupsState, SparkSnapshot, WsSnapshot } from "../api/types";
+import type { ComposerState, ModelSetupsState, SparkSnapshot, WsSnapshot } from "../api/types";
 import { ingestSnapshots } from "./metricsStore";
 import { OVERVIEW_ID } from "../constants";
 
@@ -13,6 +13,7 @@ const RECONNECT_DELAY = 2000;
 export function useSnapshot() {
   const [sparks, setSparks] = useState<SparkSnapshot[]>([]);
   const [setupState, setSetupState] = useState<ModelSetupsState | null>(null);
+  const [composerState, setComposerState] = useState<ComposerState | null>(null);
   const [connected, setConnected] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(OVERVIEW_ID);
   const wsRef = useRef<WebSocket | null>(null);
@@ -44,6 +45,7 @@ export function useSnapshot() {
           ingestSnapshots(msg.sparks);
           setSparks(msg.sparks);
           if (msg.setup) setSetupState(msg.setup);
+          if (msg.composer) setComposerState(msg.composer);
           // Default to the Overview tab; keep the current selection if it
           // is still valid (Overview is always valid).
           setActiveId((prev) => {
@@ -91,6 +93,7 @@ export function useSnapshot() {
   return {
     sparks,
     setupState,
+    composerState,
     connected,
     activeId,
     setActiveId,

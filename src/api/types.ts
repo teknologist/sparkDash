@@ -275,6 +275,8 @@ export interface WsSnapshot {
   sparks: SparkSnapshot[];
   /** Model-setup state (present once the server is on a version that sends it). */
   setup?: ModelSetupsState;
+  /** RAM-aware composer state (present once the server sends it). */
+  composer?: ComposerState;
   refreshInterval: number;
 }
 
@@ -554,4 +556,81 @@ export interface ModelSetupsState {
   error?: string | null;
   /** Tail of the current/last switch job's stdout, for the live log view. */
   log?: string[];
+}
+
+// ─── Model composer (RAM-aware brick assignment) ──────────
+/** A per-node model assignment: nodeId → list of model ids running there. */
+export type Assignment = Record<string, string[]>;
+
+/** One model "brick" in the catalog (launch internals stripped for the UI). */
+export interface ComposerBrick {
+  id: string;
+  displayName: string;
+  backend: string | null;
+  /** dual occupies BOTH nodes (TP=2) and is exclusive. */
+  placement: "single" | "dual";
+  /** Eligible nodes this brick can run on. */
+  nodes: string[];
+  /** Estimated resident unified-RAM footprint (GB). */
+  ramGB: number;
+  port: number | null;
+  servedModel: string;
+  notes: string;
+}
+
+export interface ComposerCatalog {
+  models: ComposerBrick[];
+  /** Total unified RAM per node (GB). */
+  nodeCapacityGB: Record<string, number>;
+  /** Headroom (GB) kept free of the model budget on each node. */
+  reserveGB: number;
+}
+
+export interface ComposerRunning {
+  id: string;
+  node: string;
+  port: number;
+  servedModel: string;
+  up: boolean;
+}
+
+export interface ComposerPerNode {
+  running: ComposerRunning[];
+  ramUsed: number;
+  ramCap: number;
+  budget: number;
+}
+
+export type ComposerPhase = "idle" | "applying" | "failed";
+
+export interface ComposerPreset {
+  id: string;
+  name: string;
+  assignment: Assignment;
+}
+
+export interface ComposerState {
+  catalog: ComposerCatalog;
+  perNode: Record<string, ComposerPerNode>;
+  presets: ComposerPreset[];
+  phase: ComposerPhase;
+  error: string | null;
+  applying: boolean;
+  currentAssignment: Assignment | null;
+  log: string[];
+}
+
+export interface VerifyPerNode {
+  models: string[];
+  ramUsed: number;
+  ramCap: number;
+  budget: number;
+  over: boolean;
+}
+
+export interface VerifyResult {
+  ok: boolean;
+  perNode: Record<string, VerifyPerNode>;
+  errors: string[];
+  warnings: string[];
 }

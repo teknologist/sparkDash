@@ -10,6 +10,7 @@ import dotenv from "dotenv";
 import { SparkRegistry } from "./sparks/SparkRegistry.js";
 import { SparkMonitor } from "./sparks/SparkMonitor.js";
 import { SetupManager } from "./setups/SetupManager.js";
+import { ComposerManager } from "./setups/ComposerManager.js";
 import { sshExec, sshTest, llmTest } from "./collectors/ssh.js";
 import { validateSparkTarget, createRateLimiter } from "./validate.js";
 import { getSettings, updateSettings, loadSettings } from "./settings.js";
@@ -71,6 +72,9 @@ const monitors = new Map();
 
 // ─── Model-setup manager (start/stop/switch model configs) ─
 const setupManager = new SetupManager();
+
+// ─── Model composer (RAM-aware arbitrary per-node combinations) ─
+const composerManager = new ComposerManager();
 
 // ─── Start monitor for a Spark ───────────────────────────
 function startMonitor(spark) {
@@ -1151,6 +1155,49 @@ app.post("/api/model-setups/cancel", (_req, res) => {
   res.json({ success: true, ...setupManager.cancel() });
 });
 
+// ─── Model composer (RAM-aware arbitrary per-node combinations) ──────────
+// Full state: catalog (bricks + capacity), per-node running/RAM, presets, phase.
+app.get("/api/composer/state", (_req, res) => {
+  res.json(composerManager.getState());
+});
+
+// Validate an assignment without touching anything (RAM / ports / affinity / dual).
+app.post("/api/composer/verify", (req, res) => {
+  res.json(composerManager.verify(req.body?.assignment || {}));
+});
+
+// Apply an assignment: diff vs running, start/stop bricks, regenerate llama-swap.
+// Background — progress streams over WS (composer state). Returns immediately.
+app.post("/api/composer/apply", (req, res) => {
+  const assignment = req.body?.assignment || {};
+  const check = composerManager.verify(assignment);
+  if (!check.ok) return res.status(400).json({ error: check.errors.join("; "), ...check });
+  if (composerManager.isBusy()) {
+    return res.status(409).json({ error: "An apply is already in progress" });
+  }
+  composerManager.apply(assignment).catch((err) => {
+    console.error("[composer] apply failed:", err.message);
+  });
+  res.json({ success: true, started: true });
+});
+
+// Cancel an in-flight apply.
+app.post("/api/composer/cancel", (_req, res) => {
+  res.json({ success: true, ...composerManager.cancel() });
+});
+
+// Save / delete named presets.
+app.post("/api/composer/presets", (req, res) => {
+  try {
+    res.json({ success: true, ...composerManager.savePreset(req.body || {}) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.delete("/api/composer/presets/:id", (req, res) => {
+  res.json({ success: true, ...composerManager.deletePreset(req.params.id) });
+});
+
 // ─── Static files (built frontend) ───────────────────────
 const distDir = path.join(ROOT, "dist");
 const indexHtml = path.join(distDir, "index.html");
@@ -1193,6 +1240,7 @@ function buildSnapshotPayload() {
     type: "snapshot",
     sparks,
     setup: setupManager.snapshot(),
+    composer: composerManager.getState(),
     refreshInterval: getSettings().pollIntervalMs,
   });
 }
@@ -1252,6 +1300,12 @@ setupManager.onChange = () => {
   _lastBroadcastPayload = payload;
   broadcastPayload(payload);
 };
+// Same live-push for composer apply progress / detection changes.
+composerManager.onChange = () => {
+  const payload = buildSnapshotPayload();
+  _lastBroadcastPayload = payload;
+  broadcastPayload(payload);
+};
 startBroadcast();
 
 server.listen(PORT, BIND_HOST, () => {
@@ -1274,6 +1328,7 @@ function shutdown(signal) {
     for (const m of monitors.values()) m.stop();
     monitors.clear();
     setupManager.dispose();
+    composerManager.dispose();
   } catch (err) {
     console.error("[sparkDash] error during shutdown:", err.message);
   }

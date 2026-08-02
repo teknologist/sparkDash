@@ -1,8 +1,11 @@
 import type {
+  Assignment,
+  ComposerState,
   DecodeBenchJob,
   DecodeBenchListResponse,
   LlmMetrics,
   ModelSetupsState,
+  VerifyResult,
   Settings,
   ShowcaseListResponse,
   ShowcaseSessionState,
@@ -359,4 +362,43 @@ export function stopModelSetup(): Promise<{ success: boolean }> {
 /** Cancel an in-flight switch. */
 export function cancelModelSetup(): Promise<{ success: boolean; cancelled: boolean }> {
   return apiFetch("/api/model-setups/cancel", { method: "POST" });
+}
+
+// ─── Model composer ───────────────────────────────────────
+/** Full composer state: catalog, per-node running/RAM, presets, phase (also on WS). */
+export function fetchComposerState(): Promise<ComposerState> {
+  return apiFetch("/api/composer/state");
+}
+
+/** Validate an assignment (RAM / ports / affinity / dual) without side effects. */
+export function verifyComposition(assignment: Assignment): Promise<VerifyResult> {
+  return apiFetch("/api/composer/verify", { method: "POST", body: JSON.stringify({ assignment }) });
+}
+
+/** Apply an assignment: diff vs running, start/stop bricks, regen router (async). */
+export function applyComposition(
+  assignment: Assignment
+): Promise<{ success: boolean; started?: boolean }> {
+  return apiFetch("/api/composer/apply", { method: "POST", body: JSON.stringify({ assignment }) });
+}
+
+/** Cancel an in-flight apply. */
+export function cancelComposer(): Promise<{ success: boolean; cancelled: boolean }> {
+  return apiFetch("/api/composer/cancel", { method: "POST" });
+}
+
+/** Save a named preset (nodeId → model ids). */
+export function saveComposerPreset(
+  name: string,
+  assignment: Assignment
+): Promise<{ success: boolean; id?: string }> {
+  return apiFetch("/api/composer/presets", {
+    method: "POST",
+    body: JSON.stringify({ name, assignment }),
+  });
+}
+
+/** Delete a saved preset. */
+export function deleteComposerPreset(id: string): Promise<{ success: boolean }> {
+  return apiFetch(`/api/composer/presets/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

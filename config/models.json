@@ -1,0 +1,168 @@
+{
+  "version": 1,
+  "_comment": "Model catalog ('bricks') for the RAM-aware composer. ramGB is an EDITABLE estimate of resident unified-memory footprint (weights + KV at the configured ctx) on a 128 GB GB10 node; tune against the live 'used' figure the composer shows. placement 'dual' occupies BOTH nodes (TP=2) and is exclusive. Each launch node uses {cmd,args} per action so a brick can start locally or over ssh.",
+  "nodeCapacityGB": { "spark1": 128, "spark2": 128 },
+  "models": [
+    {
+      "id": "deepseek-v4-flash",
+      "displayName": "DeepSeek V4 Flash",
+      "backend": "ds4",
+      "placement": "single",
+      "nodes": ["spark1"],
+      "ramGB": 96,
+      "port": 8000,
+      "servedModel": "deepseek-v4-flash",
+      "notes": "q2-imatrix GGUF + DSpark/MTP speculative decode, ctx 200k. Native ds4-server.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "startTimeoutMs": 1200000,
+          "start": { "cmd": "/home/eric/ds4-solo.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/ds4-solo.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/ds4-solo.sh", "args": ["status"] },
+          "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" }
+        }
+      }
+    },
+    {
+      "id": "laguna-s",
+      "displayName": "Laguna-S 2.1",
+      "backend": "vllm",
+      "placement": "single",
+      "nodes": ["spark1", "spark2"],
+      "ramGB": 72,
+      "port": 8000,
+      "servedModel": "laguna-s",
+      "notes": "NVFP4 + DFlash spec-decode (ENABLE_SPEC=1), ctx 256k, util 0.80.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "env": { "ENABLE_SPEC": "1" },
+          "startTimeoutMs": 1200000,
+          "start": { "cmd": "/home/eric/deploy/laguna/serve.sh", "args": [] },
+          "stop": { "cmd": "docker", "args": ["stop", "laguna-s"] },
+          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && echo up || echo down"] },
+          "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "laguna-s" }
+        },
+        "spark2": {
+          "target": "ssh",
+          "host": "Spark2",
+          "env": { "ENABLE_SPEC": "1" },
+          "startTimeoutMs": 1200000,
+          "start": { "cmd": "~/deploy/laguna/laguna-ctl.sh", "args": ["start"] },
+          "stop": { "cmd": "~/deploy/laguna/laguna-ctl.sh", "args": ["stop"] },
+          "status": { "cmd": "~/deploy/laguna/laguna-ctl.sh", "args": ["status"] },
+          "ready": { "host": "10.100.72.1", "port": 8000, "servedModel": "laguna-s" }
+        }
+      }
+    },
+    {
+      "id": "ornith-35b",
+      "displayName": "Ornith 1.0 35B",
+      "backend": "vllm",
+      "placement": "single",
+      "nodes": ["spark1"],
+      "ramGB": 44,
+      "port": 8000,
+      "servedModel": "ornith-35b",
+      "notes": "FP8, ctx 256k, util 0.85.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "startTimeoutMs": 900000,
+          "start": { "cmd": "/home/eric/ornith.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/ornith.sh", "args": ["stop"] },
+          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && echo up || echo down"] },
+          "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "ornith-35b" }
+        }
+      }
+    },
+    {
+      "id": "qwen3-vl-ocr",
+      "displayName": "Qwen3-VL OCR",
+      "backend": "vllm",
+      "placement": "single",
+      "nodes": ["spark2"],
+      "ramGB": 32,
+      "port": 8000,
+      "servedModel": "qwen3-vl-ocr",
+      "notes": "Co-resides with Qwen Extract on spark2 (util ~0.45 each).",
+      "launch": {
+        "spark2": {
+          "target": "ssh",
+          "host": "Spark2",
+          "startTimeoutMs": 600000,
+          "start": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["start", "ocr"] },
+          "stop": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["stop", "ocr"] },
+          "status": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["status", "ocr"] },
+          "ready": { "host": "10.100.72.1", "port": 8000, "servedModel": "qwen3-vl-ocr" }
+        }
+      }
+    },
+    {
+      "id": "qwen3.6-extract",
+      "displayName": "Qwen3.6 Extract",
+      "backend": "vllm",
+      "placement": "single",
+      "nodes": ["spark2"],
+      "ramGB": 28,
+      "port": 8001,
+      "servedModel": "qwen3.6-extract",
+      "notes": "Co-resides with Qwen OCR on spark2 (util ~0.45 each).",
+      "launch": {
+        "spark2": {
+          "target": "ssh",
+          "host": "Spark2",
+          "startTimeoutMs": 600000,
+          "start": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["start", "extract"] },
+          "stop": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["stop", "extract"] },
+          "status": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["status", "extract"] },
+          "ready": { "host": "10.100.72.1", "port": 8001, "servedModel": "qwen3.6-extract" }
+        }
+      }
+    },
+    {
+      "id": "deepseek-v4-flash-dspark",
+      "displayName": "DeepSeek V4 Flash (dual TP=2)",
+      "backend": "vllm",
+      "placement": "dual",
+      "nodes": ["spark1", "spark2"],
+      "ramGB": 85,
+      "port": 8000,
+      "servedModel": "deepseek-v4-flash-dspark",
+      "notes": "Whole-cluster: spark1 head + spark2 worker over RoCE. GMU 0.85, ctx 1M. Occupies both nodes.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "startTimeoutMs": 1200000,
+          "start": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["status"] },
+          "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-dspark" }
+        }
+      }
+    },
+    {
+      "id": "MiMo-V2.5-NVFP4",
+      "displayName": "MiMo V2.5 (dual TP=2)",
+      "backend": "vllm",
+      "placement": "dual",
+      "nodes": ["spark1", "spark2"],
+      "ramGB": 90,
+      "port": 8000,
+      "servedModel": "MiMo-V2.5-NVFP4",
+      "notes": "Whole-cluster: spark1 head + spark2 worker over Ray+RoCE. GMU 0.83, ctx 1M. Occupies both nodes.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "cwd": "/home/eric/deploy/mimo",
+          "startTimeoutMs": 1200000,
+          "start": { "cmd": "/home/eric/deploy/mimo/mimo-svc.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/deploy/mimo/mimo-svc.sh", "args": ["stop"] },
+          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && echo up || echo down"] },
+          "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "MiMo-V2.5-NVFP4" }
+        }
+      }
+    }
+  ]
+}

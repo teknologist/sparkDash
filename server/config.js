@@ -21,6 +21,17 @@ const MODEL_SETUPS_PATH =
 /** Directory where per-switch job logs are written (see SetupManager). */
 const SETUP_LOGS_DIR =
   process.env.SETUP_LOGS_DIR || path.join(ROOT, "config", "setup-logs");
+/** Model catalog ("bricks") for the RAM-aware composer — per-model launch + RAM cost. */
+const MODELS_PATH =
+  process.env.MODELS_PATH || path.join(ROOT, "config", "models.json");
+/** Saved composer presets (named per-node assignments). */
+const COMPOSITIONS_PATH =
+  process.env.COMPOSITIONS_PATH || path.join(ROOT, "config", "compositions.json");
+/** Path to the llama-swap gateway config the composer regenerates on Apply. */
+const LLAMA_SWAP_CONFIG_PATH =
+  process.env.LLAMA_SWAP_CONFIG_PATH || "/home/eric/llama-swap/config.yaml";
+/** Per-node unified-memory reserve (GB) kept free of model budget (load headroom). */
+const NODE_RAM_RESERVE_GB = parseInt(process.env.NODE_RAM_RESERVE_GB || "12", 10);
 
 // ─── LLM probe timeout ──────────────────────────────────
 const LLM_PROBE_TIMEOUT_MS = 3000;
@@ -84,6 +95,10 @@ export {
   SECRETS_KEY_PATH,
   MODEL_SETUPS_PATH,
   SETUP_LOGS_DIR,
+  MODELS_PATH,
+  COMPOSITIONS_PATH,
+  LLAMA_SWAP_CONFIG_PATH,
+  NODE_RAM_RESERVE_GB,
   LLM_PROBE_TIMEOUT_MS,
   SSH_CONNECT_TIMEOUT,
   POLL_INTERVAL_GPU,
