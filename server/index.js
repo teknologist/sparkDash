@@ -142,14 +142,26 @@ function hostToSparkId(host) {
 /** Group the active setup's serving endpoints by Spark id → running-model list. */
 function runningModelsBySpark() {
   const bySpark = {};
+  const bricks = composerManager.catalog?.models || [];
+  // A dual/TP model serves from one node's endpoint but occupies every node in
+  // its brick's `nodes`; surface it on ALL of them (flagged) so both cards show it.
+  const dualBrick = (m) =>
+    bricks.find(
+      (b) =>
+        b.placement === "dual" &&
+        Array.isArray(b.nodes) &&
+        (b.servedModel === m.servedModel || b.servedModel === m.modelId || b.id === m.modelId)
+    );
   for (const m of setupManager.getActiveModels()) {
-    const id = hostToSparkId(m.host);
-    if (!id) continue;
-    (bySpark[id] ||= []).push({
-      model: m.modelId || m.servedModel,
-      port: m.port,
-      up: m.up,
-    });
+    const entry = { model: m.modelId || m.servedModel, port: m.port, up: m.up };
+    const dual = dualBrick(m);
+    if (dual) {
+      for (const node of dual.nodes) (bySpark[node] ||= []).push({ ...entry, dual: true });
+    } else {
+      const id = hostToSparkId(m.host);
+      if (!id) continue;
+      (bySpark[id] ||= []).push(entry);
+    }
   }
   return bySpark;
 }

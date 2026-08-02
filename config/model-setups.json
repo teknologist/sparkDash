@@ -22,21 +22,40 @@
       ]
     },
     {
-      "id": "deepseek-v4",
-      "name": "DeepSeek V4 (dual)",
-      "description": "DeepSeek-V4-Flash · spark1 head + spark2 worker",
+      "id": "deepseek-v4-0731",
+      "name": "DeepSeek V4 Flash 0731 (dual)",
+      "description": "DeepSeek-V4-Flash-0731 · spark1 head + spark2 worker (TP=2, NVFP4 + DSpark)",
       "sparks": ["spark1", "spark2"],
       "startParallel": false,
-      "detect": { "localContainers": ["deepseek-v4-flash", "dspark"] },
+      "detect": { "localContainers": ["deepseek-v4-flash-0731"] },
       "components": [
         {
-          "id": "deepseek-v4",
+          "id": "deepseek-v4-0731",
           "target": "local",
-          "start": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/deepseek-v4.sh", "args": ["status"] },
+          "start": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["status"] },
           "startTimeoutMs": 1200000,
-          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-dspark" }]
+          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-0731" }]
+        }
+      ]
+    },
+    {
+      "id": "deepseek-v4-0731-entrpi",
+      "name": "DeepSeek V4 Flash 0731 (Entrpi 1-node)",
+      "description": "DeepSeek-V4-Flash-0731 IQ2/Q2K single-node on spark1 (Entrpi/ds4 fork + DSpark, in-RAM)",
+      "sparks": ["spark1"],
+      "startParallel": false,
+      "detect": { "endpoint": { "host": "127.0.0.1", "port": 8000, "matchModel": "deepseek-v4-flash" } },
+      "components": [
+        {
+          "id": "deepseek-v4-0731-entrpi",
+          "target": "local",
+          "start": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["status"] },
+          "startTimeoutMs": 600000,
+          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" }]
         }
       ]
     },
