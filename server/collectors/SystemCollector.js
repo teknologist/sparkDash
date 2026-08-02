@@ -1224,7 +1224,15 @@ export class SystemCollector {
         });
       }
     }
-    return this._readHostFile(`/proc/net/${relPath}`);
+    // Fallback: read directly. Must NOT go through _readHostFile — it re-routes
+    // /proc/net/* back into this method and would recurse infinitely. Under a
+    // bind-mounted host proc (nsenter unavailable) use the mapped path; on a
+    // bare host /proc is already the correct netns.
+    const mapped = path.join(HOST_PATHS.PROC, "net", relPath);
+    if (this._hasHostProc() && fs.existsSync(mapped)) {
+      return fs.readFileSync(mapped, "utf-8");
+    }
+    return fs.readFileSync(`/proc/net/${relPath}`, "utf-8");
   }
 
   /** Lightweight liveness for local Sparks. */
