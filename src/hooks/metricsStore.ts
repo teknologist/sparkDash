@@ -99,12 +99,22 @@ export function ingestSnapshots(sparks: SparkSnapshot[]): void {
     if (Array.isArray(m.llm)) {
       // Zip with snapshot.llmPorts so multi-port LLM series key distinctly.
       const ports = s.llmPorts ?? [];
+      let aggTps = 0;
+      let anyAvailable = false;
       for (let i = 0; i < m.llm.length; i++) {
         const llm = m.llm[i];
         const port = ports[i];
         const portKey = port != null ? `:${port}` : `:${i}`;
         pushHistory(`${s.id}:llm${portKey}.tps`, llm.generationTps);
+        if (llm.available) {
+          aggTps += llm.generationTps || 0;
+          anyAvailable = true;
+        }
       }
+      // Node-total throughput series for the overview card sparkline — sum of
+      // every serving port. Only recorded while ≥1 port is up so the series
+      // matches the card (which hides when nothing is available).
+      if (anyAvailable) pushHistory(`${s.id}:llm.aggTps`, aggTps);
     }
   }
 

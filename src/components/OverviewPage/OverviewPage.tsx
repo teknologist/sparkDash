@@ -4,6 +4,8 @@ import { resolveSparkRole } from "../../api/sparkRole";
 import { shutdownAllSparks, wakeAllSparks } from "../../api/client";
 import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { MetricBar } from "../ui/MetricBar";
+import { Sparkline } from "../ui/Sparkline";
+import { useMetricsHistoryTail } from "../../hooks/metricsStore";
 import { ActivityIcon, PowerOffIcon, PowerOnIcon } from "../ui/icons";
 
 interface OverviewPageProps {
@@ -87,6 +89,8 @@ function SparkCard({
   const gpu = spark.metrics.gpu;
   const um = spark.metrics.unifiedMemory;
   const online = spark.online;
+  // Live (in-memory) node-total tok/s history for the sparkline below the card.
+  const tpsHistory = useMetricsHistoryTail(spark.id, "llm.aggTps");
 
   const usage = gpu?.usage ?? 0;
   const tempRaw = gpu?.temperature ?? 0;
@@ -305,6 +309,17 @@ function SparkCard({
                 <span className="text-sm font-normal text-muted"> tok/s</span>
                 {active.length > 1 && (
                   <span className="text-sm font-normal text-muted"> · {active.length} models</span>
+                )}
+                {tpsHistory.length >= 2 && (
+                  <div className="mt-2 flex justify-center">
+                    <Sparkline
+                      data={tpsHistory}
+                      color="var(--color-accent)"
+                      width={180}
+                      height={32}
+                      area
+                    />
+                  </div>
                 )}
               </div>
             );
