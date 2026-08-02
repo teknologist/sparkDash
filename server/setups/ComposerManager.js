@@ -145,6 +145,11 @@ export class ComposerManager {
     return this._applying;
   }
 
+  /** Live per-node running set from the last detection probe: [{id,node,port,servedModel,up}]. */
+  get running() {
+    return this._running;
+  }
+
   getState() {
     const cat = this.catalog.toPublic();
     const perNode = {};

@@ -142,26 +142,32 @@ function hostToSparkId(host) {
 /** Group the active setup's serving endpoints by Spark id → running-model list. */
 function runningModelsBySpark() {
   const bySpark = {};
-  const bricks = composerManager.catalog?.models || [];
-  // A dual/TP model serves from one node's endpoint but occupies every node in
-  // its brick's `nodes`; surface it on ALL of them (flagged) so both cards show it.
-  const dualBrick = (m) =>
-    bricks.find(
-      (b) =>
-        b.placement === "dual" &&
-        Array.isArray(b.nodes) &&
-        (b.servedModel === m.servedModel || b.servedModel === m.modelId || b.id === m.modelId)
-    );
-  for (const m of setupManager.getActiveModels()) {
-    const entry = { model: m.modelId || m.servedModel, port: m.port, up: m.up };
-    const dual = dualBrick(m);
-    if (dual) {
-      for (const node of dual.nodes) (bySpark[node] ||= []).push({ ...entry, dual: true });
-    } else {
-      const id = hostToSparkId(m.host);
-      if (!id) continue;
-      (bySpark[id] ||= []).push(entry);
+  const cat = composerManager.catalog;
+  const isDual = (id) => cat?.getModel(id)?.placement === "dual";
+  const push = (node, entry) => {
+    const list = (bySpark[node] ||= []);
+    if (!list.some((e) => e.port === entry.port && e.model === entry.model)) list.push(entry);
+  };
+  // Primary: the composer's LIVE per-node detection (probes actual endpoints),
+  // so node cards reflect whatever is running — started via the composer, a
+  // setup, or manually. A dual/TP model serves from one endpoint but occupies
+  // every node in its brick, so surface it on all of them (flagged).
+  for (const r of composerManager.running || []) {
+    const brick = cat?.getModel(r.id);
+    const nodes = isDual(r.id) && Array.isArray(brick?.nodes) ? brick.nodes : [r.node];
+    for (const node of nodes) {
+      push(node, {
+        model: r.servedModel || r.id,
+        port: r.port,
+        up: r.up !== false,
+        ...(isDual(r.id) ? { dual: true } : {}),
+      });
     }
+  }
+  // Fallback: anything setupManager is tracking that the catalog probe missed.
+  for (const m of setupManager.getActiveModels()) {
+    const node = hostToSparkId(m.host);
+    if (node) push(node, { model: m.modelId || m.servedModel, port: m.port, up: m.up });
   }
   return bySpark;
 }
