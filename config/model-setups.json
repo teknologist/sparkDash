@@ -63,6 +63,37 @@
       ]
     },
     {
+      "id": "ds4-laguna",
+      "name": "DeepSeek V4 Flash + Laguna",
+      "description": "DeepSeek-V4-Flash single-node on spark1 · Laguna-S-2.1 (DFlash spec-decode) on spark2",
+      "sparks": ["spark1", "spark2"],
+      "startParallel": true,
+      "detect": { "endpoint": { "host": "10.100.72.1", "port": 8000, "matchModel": "laguna" } },
+      "components": [
+        {
+          "id": "ds4",
+          "target": "local",
+          "start": { "cmd": "/home/eric/ds4-solo.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/ds4-solo.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/ds4-solo.sh", "args": ["status"] },
+          "startTimeoutMs": 1200000,
+          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" }]
+        },
+        {
+          "id": "laguna",
+          "target": "ssh",
+          "host": "Spark2",
+          "cmd": "~/deploy/laguna/laguna-ctl.sh",
+          "env": { "ENABLE_SPEC": "1" },
+          "start": { "args": ["start"] },
+          "stop": { "args": ["stop"] },
+          "status": { "args": ["status"] },
+          "startTimeoutMs": 1200000,
+          "ready": [{ "host": "10.100.72.1", "port": 8000, "servedModel": "laguna-s" }]
+        }
+      ]
+    },
+    {
       "id": "ds4-qwen",
       "name": "DeepSeek V4 Flash + Qwen (OCR+Extract)",
       "description": "DeepSeek-V4-Flash q2-imatrix single-node (300k ctx, in-RAM) on spark1 · Qwen OCR+Extract on spark2",
