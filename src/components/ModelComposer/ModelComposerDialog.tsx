@@ -6,6 +6,7 @@ import { BotIcon, MemoryIcon, PlusIcon } from "../ui/icons";
 import {
   applyComposition,
   cancelComposer,
+  fetchComposerState,
   saveComposerPreset,
   verifyComposition,
 } from "../../api/client";
@@ -140,24 +141,39 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
   const phase = state?.phase ?? "idle";
   const log = state?.log ?? [];
 
-  // Latest state without retriggering the seed effect on every WS tick.
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  // `dirty` = the user has started editing; until then the board tracks the
+  // live running layout so it's always in sync with what's actually loaded.
+  const [dirty, setDirty] = useState(false);
 
-  // Seed the board from the live running layout ONCE when opened — never while
-  // the user is editing (re-seeding on every WS update wiped edits and could
-  // apply a transient empty node, stopping a model the user didn't touch).
+  // On open: reset, and prime immediately from a FORCED-fresh fetch (GET /state
+  // runs a fresh detection) so the board reflects reality the instant it opens.
   useEffect(() => {
     if (!open) return;
-    const s = stateRef.current;
-    if (!s) return;
-    const seed: Assignment = {};
-    for (const [node, pn] of Object.entries(s.perNode)) seed[node] = pn.running.map((r) => r.id);
-    setAssignment(seed);
+    setDirty(false);
     setServerErrors(null);
     setActionError(null);
     setConfirmApply(false);
+    let cancelled = false;
+    fetchComposerState()
+      .then((fresh) => {
+        if (cancelled) return;
+        const seed: Assignment = {};
+        for (const [node, pn] of Object.entries(fresh.perNode)) seed[node] = pn.running.map((r) => r.id);
+        setAssignment(seed);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
+
+  // Keep the board synced to live running (from WS) until the first edit.
+  useEffect(() => {
+    if (!open || dirty || !state) return;
+    const seed: Assignment = {};
+    for (const [node, pn] of Object.entries(state.perNode)) seed[node] = pn.running.map((r) => r.id);
+    setAssignment((prev) => (JSON.stringify(prev) === JSON.stringify(seed) ? prev : seed));
+  }, [open, dirty, state]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -188,6 +204,7 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
   const placeBrick = (id: string, node: string) => {
     const m = byId.get(id);
     if (!m) return;
+    setDirty(true);
     setServerErrors(null);
     setConfirmApply(false);
     setAssignment((prev) => {
@@ -207,6 +224,7 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
   };
 
   const removeBrick = (id: string) => {
+    setDirty(true);
     setServerErrors(null);
     setConfirmApply(false);
     setAssignment((prev) => {
@@ -219,6 +237,7 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
   const loadPreset = (a: Assignment) => {
     const next: Assignment = {};
     for (const n of nodes) next[n] = [...(a[n] || [])];
+    setDirty(true);
     setAssignment(next);
     setServerErrors(null);
     setConfirmApply(false);

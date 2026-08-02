@@ -4,7 +4,7 @@ import { ModelCatalog } from "./ModelCatalog.js";
 import { generateLlamaSwapConfig } from "./llamaSwapGen.js";
 import { COMPOSITIONS_PATH, LLAMA_SWAP_CONFIG_PATH } from "../config.js";
 
-const DETECT_INTERVAL_MS = 8000;
+const DETECT_INTERVAL_MS = 5000;
 const READY_TIMEOUT_MS = 180000;
 const READY_POLL_MS = 5000;
 const LOG_MAX = 400;
@@ -207,26 +207,46 @@ export class ComposerManager {
   }
 
   // ─── Detection (per-node running set) ────────────────────
+  /** Force a fresh detection and return the current state (used by GET /state). */
+  async detectNow() {
+    await this._detect();
+    return this.getState();
+  }
+
   async _detect() {
     if (this._disposed || this._applying) return;
-    const running = [];
+    // Probe every eligible endpoint in PARALLEL — sequential probing stalls on
+    // each down endpoint's timeout and made the board lag reality.
+    const checks = [];
     for (const model of this.catalog.models) {
       const eligible = Array.isArray(model.nodes) ? model.nodes : Object.keys(model.launch || {});
       for (const node of eligible) {
         const spec = model.launch?.[node] || model.launch?.[eligible[0]];
         const ready = spec?.ready;
         if (!ready) continue;
-        if (await this._probeReady(ready)) {
-          running.push({
-            id: model.id,
-            node,
-            port: ready.port,
-            servedModel: ready.servedModel || model.servedModel,
-            up: true,
-          });
-          break; // found where it runs
-        }
+        checks.push(
+          this._probeReady(ready).then((up) =>
+            up
+              ? {
+                  id: model.id,
+                  node,
+                  port: ready.port,
+                  servedModel: ready.servedModel || model.servedModel,
+                  up: true,
+                }
+              : null
+          )
+        );
       }
+    }
+    const found = (await Promise.all(checks)).filter(Boolean);
+    // One entry per model (a model eligible on multiple nodes runs on one).
+    const seen = new Set();
+    const running = [];
+    for (const r of found) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      running.push(r);
     }
     const changed = JSON.stringify(running) !== JSON.stringify(this._running);
     this._running = running;

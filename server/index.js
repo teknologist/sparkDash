@@ -1157,8 +1157,10 @@ app.post("/api/model-setups/cancel", (_req, res) => {
 
 // ─── Model composer (RAM-aware arbitrary per-node combinations) ──────────
 // Full state: catalog (bricks + capacity), per-node running/RAM, presets, phase.
-app.get("/api/composer/state", (_req, res) => {
-  res.json(composerManager.getState());
+app.get("/api/composer/state", async (_req, res) => {
+  // Force a fresh detection so opening the composer reflects reality now,
+  // not the ≤detect-interval-stale background snapshot.
+  res.json(await composerManager.detectNow());
 });
 
 // Validate an assignment without touching anything (RAM / ports / affinity / dual).
