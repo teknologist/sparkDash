@@ -270,6 +270,11 @@ export class ComposerManager {
       const desiredKey = new Set(desired.map((u) => `${u.id}@${u.node}`));
       const runningKey = new Set(running.map((r) => `${r.id}@${r.node}`));
 
+      // Keep (don't touch) models already serving where the new config wants
+      // them — incremental apply, not a blanket teardown. Logged for visibility.
+      const kept = desired.filter((u) => runningKey.has(`${u.id}@${u.node}`));
+      for (const u of kept) this._appendLog(`Keeping ${u.id} on ${u.node} (already serving)`);
+
       // Stop anything running that isn't desired on that same node.
       const toStop = running.filter((r) => !desiredKey.has(`${r.id}@${r.node}`));
       for (const r of toStop) {
