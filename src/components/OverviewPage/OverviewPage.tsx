@@ -311,12 +311,13 @@ function SparkCard({
                   <span className="text-sm font-normal text-muted"> · {active.length} models</span>
                 )}
                 {tpsHistory.length >= 2 && (
-                  <div className="mt-2 flex justify-center">
+                  <div className="mt-2">
                     <Sparkline
                       data={tpsHistory}
                       color="var(--color-accent)"
                       width={180}
                       height={32}
+                      fullWidth
                       area
                     />
                   </div>

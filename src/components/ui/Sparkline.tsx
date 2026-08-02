@@ -5,6 +5,8 @@ interface SparklineProps {
   color?: string;
   /** When true, render a soft area-fill under the line. */
   area?: boolean;
+  /** Stretch to fill the container width (responsive SVG via viewBox). */
+  fullWidth?: boolean;
 }
 
 /**
@@ -18,12 +20,16 @@ export function Sparkline({
   height = 24,
   color = "var(--color-accent)",
   area = true,
+  fullWidth = false,
 }: SparklineProps) {
   if (data.length < 2) {
     return (
       <div
-        className="sparkline-box inline-block"
-        style={{ ["--spark-w" as string]: `${width}px`, ["--spark-h" as string]: `${height}px` }}
+        className={fullWidth ? "sparkline-box block w-full" : "sparkline-box inline-block"}
+        style={{
+          ["--spark-w" as string]: fullWidth ? "100%" : `${width}px`,
+          ["--spark-h" as string]: `${height}px`,
+        }}
       />
     );
   }
@@ -44,7 +50,13 @@ export function Sparkline({
   const fillColor = `color-mix(in srgb, ${color} 16%, transparent)`;
 
   return (
-    <svg width={width} height={height} className="inline-block align-middle">
+    <svg
+      {...(fullWidth
+        ? { width: "100%", viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none" as const }
+        : { width })}
+      height={height}
+      className={fullWidth ? "block w-full align-middle" : "inline-block align-middle"}
+    >
       {area && (
         <path d={areaPath} fill={fillColor} stroke="none" />
       )}
