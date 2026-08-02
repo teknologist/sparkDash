@@ -140,16 +140,24 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
   const phase = state?.phase ?? "idle";
   const log = state?.log ?? [];
 
-  // Seed the board from the live running layout when opened.
+  // Latest state without retriggering the seed effect on every WS tick.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  // Seed the board from the live running layout ONCE when opened — never while
+  // the user is editing (re-seeding on every WS update wiped edits and could
+  // apply a transient empty node, stopping a model the user didn't touch).
   useEffect(() => {
-    if (!open || !state) return;
+    if (!open) return;
+    const s = stateRef.current;
+    if (!s) return;
     const seed: Assignment = {};
-    for (const [node, pn] of Object.entries(state.perNode)) seed[node] = pn.running.map((r) => r.id);
+    for (const [node, pn] of Object.entries(s.perNode)) seed[node] = pn.running.map((r) => r.id);
     setAssignment(seed);
     setServerErrors(null);
     setActionError(null);
     setConfirmApply(false);
-  }, [open, state?.currentAssignment]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!mounted) return;
