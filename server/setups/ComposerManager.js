@@ -264,11 +264,14 @@ export class ComposerManager {
     try {
       await this._detect();
       const desired = this._runUnits(assignment); // [{id, node, model, spec}]
-      const desiredIds = new Set(desired.map((u) => u.id));
       const running = [...this._running];
+      // Diff by id+node so moving a movable brick (e.g. laguna spark2→spark1)
+      // is a stop-on-old + start-on-new, not a mistaken no-op.
+      const desiredKey = new Set(desired.map((u) => `${u.id}@${u.node}`));
+      const runningKey = new Set(running.map((r) => `${r.id}@${r.node}`));
 
-      // Stop anything running that isn't desired.
-      const toStop = running.filter((r) => !desiredIds.has(r.id));
+      // Stop anything running that isn't desired on that same node.
+      const toStop = running.filter((r) => !desiredKey.has(`${r.id}@${r.node}`));
       for (const r of toStop) {
         const model = this.catalog.getModel(r.id);
         const spec = model?.launch?.[r.node] || Object.values(model?.launch || {})[0];
@@ -280,9 +283,8 @@ export class ComposerManager {
         }
       }
 
-      // Start desired bricks not already serving (in parallel across nodes).
-      const runningIds = new Set(running.map((r) => r.id));
-      const toStart = desired.filter((u) => !runningIds.has(u.id));
+      // Start desired bricks not already serving on their target node.
+      const toStart = desired.filter((u) => !runningKey.has(`${u.id}@${u.node}`));
       await Promise.all(
         toStart.map((u) => {
           this._appendLog(`Starting ${u.id} on ${u.node}…`);

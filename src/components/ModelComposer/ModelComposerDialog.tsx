@@ -257,7 +257,12 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal-sheet w-full max-w-3xl" role="dialog" aria-modal="true">
+      <div
+        className="modal-sheet w-full"
+        style={{ maxWidth: "56rem", maxHeight: "min(92vh, 52rem)" }}
+        role="dialog"
+        aria-modal="true"
+      >
         <div className="modal-sheet__header flex items-center gap-2">
           <MemoryIcon className="h-4 w-4 shrink-0 text-accent" />
           <span>Compose Models</span>
