@@ -291,14 +291,21 @@ function SparkCard({
 
           {(() => {
             const llmArr = spark.metrics.llm;
-            const llm = Array.isArray(llmArr) ? llmArr.find((l) => l.available) : null;
-            if (!llm) return null;
+            // Aggregate generation throughput across every serving LLM port on
+            // this node (e.g. OCR + Extract, or a single model). Sum is the
+            // node's total tok/s; the port count hints when it's aggregated.
+            const active = Array.isArray(llmArr) ? llmArr.filter((l) => l.available) : [];
+            if (active.length === 0) return null;
+            const aggTps = active.reduce((sum, l) => sum + (l.generationTps || 0), 0);
             return (
               <div className="mt-3.5 border-t border-border pt-3 text-center">
                 <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
-                  {llm.generationTps.toFixed(0)}
+                  {aggTps.toFixed(0)}
                 </span>
                 <span className="text-sm font-normal text-muted"> tok/s</span>
+                {active.length > 1 && (
+                  <span className="text-sm font-normal text-muted"> · {active.length} models</span>
+                )}
               </div>
             );
           })()}
