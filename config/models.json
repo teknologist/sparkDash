@@ -12,7 +12,7 @@
       "ramGB": 90,
       "port": 8000,
       "servedModel": "deepseek-v4-flash",
-      "notes": "Single-node ds4 (Entrpi/ds4 fork v0.5.x, CUDA sm_121) serving the DeepSeek-V4-Flash-0731 IQ2XXS/Q2K GGUF (~81 GiB, in-RAM) + DSpark. Fast single-node alternative to the 2-node NVFP4 dual; lower-precision 2-bit quant. Boots in ~10s.",
+      "notes": "Single-node ds4 (Entrpi/ds4 fork v0.5.x, CUDA sm_121) serving the DeepSeek-V4-Flash-0731 IQ2XXS/Q2K GGUF (~81 GiB, in-RAM) + DSpark, ctx 200k. Fast single-node alternative to the 2-node NVFP4 dual; lower-precision 2-bit quant. Boots in ~10s.",
       "launch": {
         "spark1": {
           "target": "local",
