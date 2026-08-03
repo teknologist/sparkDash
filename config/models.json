@@ -71,7 +71,7 @@
       "backend": "vllm",
       "placement": "single",
       "nodes": ["spark1", "spark2"],
-      "ramGB": 44,
+      "ramGB": 108,
       "port": 8003,
       "servedModel": "ornith-35b",
       "notes": "FP8, ctx 256k, util 0.85. Backend port 8003 (unique so it can co-reside with other single-node models). Runnable on either node (ornith.sh + model + image on both); clients reach it via the llama-swap gateway.",
