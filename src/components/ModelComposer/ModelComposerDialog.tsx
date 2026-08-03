@@ -194,6 +194,21 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
     [catalog]
   );
   const placed = useMemo(() => new Set(Object.values(assignment).flat()), [assignment]);
+  // Dual (whole-cluster) models occupy every node in `m.nodes`; surface them as
+  // a single spanning unit rather than a duplicate tile per column.
+  const dualPlaced = useMemo(() => {
+    const seen = new Set<string>();
+    const out: ComposerBrick[] = [];
+    for (const ids of Object.values(assignment))
+      for (const id of ids) {
+        const m = byId.get(id);
+        if (m?.placement === "dual" && !seen.has(id)) {
+          seen.add(id);
+          out.push(m);
+        }
+      }
+    return out;
+  }, [assignment, byId]);
   const verdict = useMemo(
     () => (catalog ? validateClient(catalog, assignment) : { ok: false, perNode: {}, errors: [] }),
     [catalog, assignment]
@@ -347,11 +362,60 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
             </div>
           )}
 
-          {/* Node columns */}
+          {/* Whole-cluster (dual TP=2) models — one unit spanning every node */}
+          {dualPlaced.map((m) => (
+            <div
+              key={m.id}
+              className="rounded-lg border border-warning/50 bg-warning/10 p-3"
+            >
+              <div className="mb-1.5 flex items-center gap-2">
+                <BotIcon className="h-3.5 w-3.5 shrink-0 text-warning" />
+                <span className="truncate text-xs font-semibold text-text-strong">{m.displayName}</span>
+                <span className="shrink-0 rounded bg-warning/25 px-1 py-0.5 text-[9px] font-semibold uppercase text-warning">
+                  whole cluster
+                </span>
+                {m.backend && (
+                  <span
+                    className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase ${
+                      backendBadge[m.backend] || "bg-border text-muted"
+                    }`}
+                  >
+                    {m.backend}
+                  </span>
+                )}
+                <span className="ml-auto shrink-0 font-tabular text-[11px] text-muted">
+                  {m.ramGB} GB/node
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeBrick(m.id)}
+                  className="shrink-0 rounded px-1 text-muted opacity-60 hover:text-danger hover:opacity-100"
+                  aria-label={`Remove ${m.displayName}`}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
+                <span>occupies</span>
+                {m.nodes.map((n, i) => (
+                  <span key={n} className="flex items-center gap-1.5">
+                    {i > 0 && <span className="text-warning">+</span>}
+                    <span className="rounded bg-base/60 px-1.5 py-0.5 font-semibold text-text">{n}</span>
+                  </span>
+                ))}
+                <span>· exclusive · TP={m.nodes.length}</span>
+              </div>
+            </div>
+          ))}
+
+          {/* Node columns (single-node bricks; dual models shown above) */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {nodes.map((node) => {
               const v = verdict.perNode[node] ?? { ramUsed: 0, budget: 0, over: false };
-              const ids = assignment[node] || [];
+              const dualOnNode = dualPlaced.find((m) => m.nodes.includes(node));
+              const ids = (assignment[node] || []).filter(
+                (id) => byId.get(id)?.placement !== "dual"
+              );
               return (
                 <div
                   key={node}
@@ -384,18 +448,21 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
                     caption={`${Math.round((v.ramUsed / (v.budget || 1)) * 100)}%`}
                   />
                   <div className="mt-3 min-h-[64px] space-y-1.5">
-                    {ids.length === 0 && (
+                    {dualOnNode ? (
+                      <div className="flex h-16 items-center justify-center rounded border border-dashed border-warning/40 px-2 text-center text-[11px] text-warning/80">
+                        held by {dualOnNode.displayName} · whole cluster
+                      </div>
+                    ) : ids.length === 0 ? (
                       <div className="flex h-16 items-center justify-center rounded border border-dashed border-border text-[11px] text-muted">
                         drop a model here
                       </div>
+                    ) : (
+                      ids.map((id) => {
+                        const m = byId.get(id);
+                        if (!m) return null;
+                        return <BrickTile key={id} brick={m} onRemove={() => removeBrick(id)} />;
+                      })
                     )}
-                    {ids.map((id) => {
-                      const m = byId.get(id);
-                      if (!m) return null;
-                      return (
-                        <BrickTile key={id} brick={m} onRemove={() => removeBrick(id)} />
-                      );
-                    })}
                   </div>
                 </div>
               );

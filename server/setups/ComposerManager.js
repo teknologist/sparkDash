@@ -145,11 +145,26 @@ export class ComposerManager {
     return this._applying;
   }
 
+  /** Live per-node running set from the last detection probe: [{id,node,port,servedModel,up}]. */
+  get running() {
+    return this._running;
+  }
+
   getState() {
     const cat = this.catalog.toPublic();
     const perNode = {};
+    const isDual = (id) => this.catalog.getModel(id)?.placement === "dual";
+    const dualRunning = this._running.filter((r) => isDual(r.id));
     for (const node of Object.keys(cat.nodeCapacityGB)) {
-      const running = this._running.filter((r) => r.node === node);
+      // Single-node models on this node, plus any dual/TP model whose brick
+      // spans this node (a dual serves from one endpoint but occupies all nodes).
+      const running = this._running.filter((r) => r.node === node && !isDual(r.id));
+      for (const r of dualRunning) {
+        const nodesOf = this.catalog.getModel(r.id)?.nodes;
+        if (Array.isArray(nodesOf) ? nodesOf.includes(node) : r.node === node) {
+          running.push({ ...r, node });
+        }
+      }
       const ramUsed = running.reduce(
         (s, r) => s + (Number(this.catalog.getModel(r.id)?.ramGB) || 0),
         0
@@ -263,7 +278,10 @@ export class ComposerManager {
       const data = await res.json().catch(() => null);
       const ids = (data?.data || []).map((m) => String(m.id).toLowerCase());
       const want = String(ready.servedModel || "").toLowerCase();
-      return want ? ids.some((x) => x.includes(want)) : ids.length > 0;
+      // EXACT match — substring matching false-positives across bricks that
+      // share a prefix (e.g. "deepseek-v4-flash" ⊂ "deepseek-v4-flash-0731"),
+      // which double-attributes the endpoint and breaks RAM/port accounting.
+      return want ? ids.includes(want) : ids.length > 0;
     } catch {
       return false;
     }

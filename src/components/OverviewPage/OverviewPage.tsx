@@ -280,13 +280,20 @@ function SparkCard({
                 {spark.runningModels.map((m) => (
                   <span
                     key={`${m.model}-${m.port}`}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-elevated px-2 py-0.5 text-[10px] text-text"
-                    title={`port ${m.port} · ${m.up ? "serving" : "starting / not ready"}`}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] text-text ${
+                      m.dual ? "border-warning/50 bg-warning/10" : "border-border bg-surface-elevated"
+                    }`}
+                    title={`port ${m.port} · ${m.up ? "serving" : "starting / not ready"}${m.dual ? " · whole-cluster (dual TP=2)" : ""}`}
                   >
                     <span
                       className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.up ? "bg-success" : "bg-warning animate-pulse"}`}
                     />
                     {m.model}
+                    {m.dual && (
+                      <span className="rounded bg-warning/25 px-1 text-[8px] font-semibold uppercase text-warning">
+                        dual
+                      </span>
+                    )}
                   </span>
                 ))}
               </div>
