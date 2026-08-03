@@ -8,11 +8,11 @@
       "displayName": "DeepSeek V4 Flash 0731 (Entrpi 1-node)",
       "backend": "ds4",
       "placement": "single",
-      "nodes": ["spark1"],
+      "nodes": ["spark1", "spark2"],
       "ramGB": 90,
       "port": 8000,
       "servedModel": "deepseek-v4-flash",
-      "notes": "Single-node ds4 (Entrpi/ds4 fork v0.5.x, CUDA sm_121) serving the DeepSeek-V4-Flash-0731 IQ2XXS/Q2K GGUF (~81 GiB, in-RAM) + DSpark, ctx 200k. Fast single-node alternative to the 2-node NVFP4 dual; lower-precision 2-bit quant. Boots in ~10s.",
+      "notes": "Single-node ds4 (Entrpi/ds4 fork v0.5.x, CUDA sm_121) serving the DeepSeek-V4-Flash-0731 IQ2XXS/Q2K GGUF (~81 GiB, in-RAM) + DSpark, ctx 200k. Runnable on either node (ds4-entrpi.sh present on both; gguf+drafter cached on both). Backend port 8000; clients reach it via the llama-swap gateway.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -21,6 +21,15 @@
           "stop": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["stop"] },
           "status": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["status"] },
           "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" }
+        },
+        "spark2": {
+          "target": "ssh",
+          "host": "Spark2",
+          "startTimeoutMs": 600000,
+          "start": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["status"] },
+          "ready": { "host": "10.100.72.1", "port": 8000, "servedModel": "deepseek-v4-flash" }
         }
       }
     },
@@ -61,11 +70,11 @@
       "displayName": "Ornith 1.0 35B",
       "backend": "vllm",
       "placement": "single",
-      "nodes": ["spark1"],
+      "nodes": ["spark1", "spark2"],
       "ramGB": 44,
       "port": 8003,
       "servedModel": "ornith-35b",
-      "notes": "FP8, ctx 256k, util 0.85. Backend port 8003 (unique so it can co-reside with other single-node models; clients reach it via the llama-swap gateway).",
+      "notes": "FP8, ctx 256k, util 0.85. Backend port 8003 (unique so it can co-reside with other single-node models). Runnable on either node (ornith.sh + model + image on both); clients reach it via the llama-swap gateway.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -75,6 +84,16 @@
           "stop": { "cmd": "/home/eric/ornith.sh", "args": ["stop"] },
           "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8003/v1/models >/dev/null 2>&1 && echo up || echo down"] },
           "ready": { "host": "127.0.0.1", "port": 8003, "servedModel": "ornith-35b" }
+        },
+        "spark2": {
+          "target": "ssh",
+          "host": "Spark2",
+          "env": { "ORNITH_PORT": "8003" },
+          "startTimeoutMs": 900000,
+          "start": { "cmd": "/home/eric/ornith.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/ornith.sh", "args": ["stop"] },
+          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://10.100.72.1:8003/v1/models >/dev/null 2>&1 && echo up || echo down"] },
+          "ready": { "host": "10.100.72.1", "port": 8003, "servedModel": "ornith-35b" }
         }
       }
     },
@@ -83,12 +102,20 @@
       "displayName": "Qwen3-VL OCR",
       "backend": "vllm",
       "placement": "single",
-      "nodes": ["spark2"],
+      "nodes": ["spark1", "spark2"],
       "ramGB": 32,
-      "port": 8000,
+      "port": 8004,
       "servedModel": "qwen3-vl-ocr",
-      "notes": "Co-resides with Qwen Extract on spark2 (util ~0.45 each).",
+      "notes": "NVFP4, ctx 64k, util 0.30. Backend port 8004 (moved off 8000 so it can co-reside with entrpi/dual). Runnable on either node (model + vllm-svc.sh + image on both); clients reach it via the llama-swap gateway.",
       "launch": {
+        "spark1": {
+          "target": "local",
+          "startTimeoutMs": 600000,
+          "start": { "cmd": "/home/eric/deploy/vllm-services/vllm-svc.sh", "args": ["start", "ocr"] },
+          "stop": { "cmd": "/home/eric/deploy/vllm-services/vllm-svc.sh", "args": ["stop", "ocr"] },
+          "status": { "cmd": "/home/eric/deploy/vllm-services/vllm-svc.sh", "args": ["status", "ocr"] },
+          "ready": { "host": "127.0.0.1", "port": 8004, "servedModel": "qwen3-vl-ocr" }
+        },
         "spark2": {
           "target": "ssh",
           "host": "Spark2",
@@ -96,7 +123,7 @@
           "start": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["start", "ocr"] },
           "stop": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["stop", "ocr"] },
           "status": { "cmd": "~/deploy/vllm-services/vllm-svc.sh", "args": ["status", "ocr"] },
-          "ready": { "host": "10.100.72.1", "port": 8000, "servedModel": "qwen3-vl-ocr" }
+          "ready": { "host": "10.100.72.1", "port": 8004, "servedModel": "qwen3-vl-ocr" }
         }
       }
     },
@@ -105,12 +132,20 @@
       "displayName": "Qwen3.6 Extract",
       "backend": "vllm",
       "placement": "single",
-      "nodes": ["spark2"],
+      "nodes": ["spark1", "spark2"],
       "ramGB": 28,
       "port": 8001,
       "servedModel": "qwen3.6-extract",
-      "notes": "Co-resides with Qwen OCR on spark2 (util ~0.45 each).",
+      "notes": "NVFP4, ctx 256k, util 0.45. Backend port 8001. Runnable on either node (model + vllm-svc.sh + image on both); clients reach it via the llama-swap gateway.",
       "launch": {
+        "spark1": {
+          "target": "local",
+          "startTimeoutMs": 600000,
+          "start": { "cmd": "/home/eric/deploy/vllm-services/vllm-svc.sh", "args": ["start", "extract"] },
+          "stop": { "cmd": "/home/eric/deploy/vllm-services/vllm-svc.sh", "args": ["stop", "extract"] },
+          "status": { "cmd": "/home/eric/deploy/vllm-services/vllm-svc.sh", "args": ["status", "extract"] },
+          "ready": { "host": "127.0.0.1", "port": 8001, "servedModel": "qwen3.6-extract" }
+        },
         "spark2": {
           "target": "ssh",
           "host": "Spark2",
