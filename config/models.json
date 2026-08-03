@@ -31,28 +31,28 @@
       "placement": "single",
       "nodes": ["spark1", "spark2"],
       "ramGB": 72,
-      "port": 8000,
+      "port": 8002,
       "servedModel": "laguna-s",
-      "notes": "NVFP4 + DFlash spec-decode (ENABLE_SPEC=1), ctx 256k, util 0.80.",
+      "notes": "NVFP4 + DFlash spec-decode (ENABLE_SPEC=1), ctx 256k, util 0.80. Backend port 8002 (unique so it can co-reside with other single-node models; clients reach it via the llama-swap gateway).",
       "launch": {
         "spark1": {
           "target": "local",
-          "env": { "ENABLE_SPEC": "1" },
+          "env": { "ENABLE_SPEC": "1", "LAGUNA_PORT": "8002" },
           "startTimeoutMs": 1200000,
           "start": { "cmd": "/home/eric/deploy/laguna/serve.sh", "args": [] },
           "stop": { "cmd": "docker", "args": ["stop", "laguna-s"] },
-          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && echo up || echo down"] },
-          "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "laguna-s" }
+          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8002/v1/models >/dev/null 2>&1 && echo up || echo down"] },
+          "ready": { "host": "127.0.0.1", "port": 8002, "servedModel": "laguna-s" }
         },
         "spark2": {
           "target": "ssh",
           "host": "Spark2",
-          "env": { "ENABLE_SPEC": "1" },
+          "env": { "ENABLE_SPEC": "1", "LAGUNA_PORT": "8002" },
           "startTimeoutMs": 1200000,
           "start": { "cmd": "~/deploy/laguna/laguna-ctl.sh", "args": ["start"] },
           "stop": { "cmd": "~/deploy/laguna/laguna-ctl.sh", "args": ["stop"] },
           "status": { "cmd": "~/deploy/laguna/laguna-ctl.sh", "args": ["status"] },
-          "ready": { "host": "10.100.72.1", "port": 8000, "servedModel": "laguna-s" }
+          "ready": { "host": "10.100.72.1", "port": 8002, "servedModel": "laguna-s" }
         }
       }
     },
@@ -63,17 +63,18 @@
       "placement": "single",
       "nodes": ["spark1"],
       "ramGB": 44,
-      "port": 8000,
+      "port": 8003,
       "servedModel": "ornith-35b",
-      "notes": "FP8, ctx 256k, util 0.85.",
+      "notes": "FP8, ctx 256k, util 0.85. Backend port 8003 (unique so it can co-reside with other single-node models; clients reach it via the llama-swap gateway).",
       "launch": {
         "spark1": {
           "target": "local",
+          "env": { "ORNITH_PORT": "8003" },
           "startTimeoutMs": 900000,
           "start": { "cmd": "/home/eric/ornith.sh", "args": ["start"] },
           "stop": { "cmd": "/home/eric/ornith.sh", "args": ["stop"] },
-          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && echo up || echo down"] },
-          "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "ornith-35b" }
+          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8003/v1/models >/dev/null 2>&1 && echo up || echo down"] },
+          "ready": { "host": "127.0.0.1", "port": 8003, "servedModel": "ornith-35b" }
         }
       }
     },

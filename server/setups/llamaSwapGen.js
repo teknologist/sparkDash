@@ -87,20 +87,22 @@ export function generateLlamaSwapConfig(catalog, assignment) {
     else spark1Members.push(served);
   }
 
+  // swap:false = the node's assigned models CO-RESIDE (each on its own unique
+  // backend port; the composer's RAM check guarantees the set fits). llama-swap
+  // routes each request to the right backend by name and keeps them all loaded,
+  // so any RAM-fitting combination runs concurrently. (swap:true would evict
+  // siblings on each request — wrong for a validated simultaneous set.)
   lines.push("groups:");
-  if (spark1Members.length) {
-    lines.push('  "spark1":');
-    lines.push("    swap: true");
-    lines.push("    exclusive: false");
-    lines.push("    members:");
-    for (const m of spark1Members) lines.push(`      - "${m}"`);
-  }
-  if (spark2Members.length) {
-    lines.push('  "spark2":');
+  for (const [group, members] of [
+    ["spark1", spark1Members],
+    ["spark2", spark2Members],
+  ]) {
+    if (!members.length) continue;
+    lines.push(`  "${group}":`);
     lines.push("    swap: false");
     lines.push("    exclusive: false");
     lines.push("    members:");
-    for (const m of spark2Members) lines.push(`      - "${m}"`);
+    for (const m of members) lines.push(`      - "${m}"`);
   }
   lines.push("");
 
