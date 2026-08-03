@@ -2,6 +2,7 @@ import fs from "fs";
 import { spawn } from "child_process";
 import { ModelCatalog } from "./ModelCatalog.js";
 import { generateLlamaSwapConfig } from "./llamaSwapGen.js";
+import { allocateNode } from "./nodeAlloc.js";
 import { COMPOSITIONS_PATH, LLAMA_SWAP_CONFIG_PATH } from "../config.js";
 
 const DETECT_INTERVAL_MS = 5000;
@@ -73,15 +74,19 @@ export function validateAssignment(catalog, assignment) {
     }
   }
 
-  // Per-node RAM budget + port collisions.
+  // Per-node memory (DYNAMIC util allocation) + port collisions.
   for (const node of nodes) {
     const list = resolved[node];
-    const ramUsed = list.reduce((sum, r) => sum + (Number(r.model.ramGB) || 0), 0);
+    const alloc = allocateNode(catalog, node, list.map((r) => r.id));
     const budget = catalog.nodeBudgetGB(node);
     const ramCap = catalog.nodeCapacityGB(node);
-    const over = ramUsed > budget;
+    const over = !alloc.ok;
     if (over) {
-      errors.push(`${node} over budget: ${ramUsed} GB used > ${budget} GB available (of ${ramCap} GB)`);
+      errors.push(
+        alloc.error
+          ? `${node}: ${alloc.error}`
+          : `${node} over budget: ${alloc.ramUsed} GB > ${budget} GB available (of ${ramCap} GB)`
+      );
     }
     const byPort = new Map();
     for (const { id, model } of list) {
@@ -93,7 +98,14 @@ export function validateAssignment(catalog, assignment) {
         byPort.set(port, id);
       }
     }
-    perNode[node] = { models: list.map((r) => r.id), ramUsed, ramCap, budget, over };
+    perNode[node] = {
+      models: list.map((r) => r.id),
+      ramUsed: alloc.ramUsed,
+      ramCap,
+      budget,
+      over,
+      perModel: alloc.perModel, // { id: {footprintGB, util} } — util drives GPU_UTIL at launch
+    };
   }
 
   return { ok: errors.length === 0, perNode, errors, warnings };
@@ -165,13 +177,11 @@ export class ComposerManager {
           running.push({ ...r, node });
         }
       }
-      const ramUsed = running.reduce(
-        (s, r) => s + (Number(this.catalog.getModel(r.id)?.ramGB) || 0),
-        0
-      );
+      const alloc = allocateNode(this.catalog, node, running.map((r) => r.id));
       perNode[node] = {
         running,
-        ramUsed,
+        ramUsed: alloc.ramUsed,
+        perModel: alloc.perModel,
         ramCap: this.catalog.nodeCapacityGB(node),
         budget: this.catalog.nodeBudgetGB(node),
       };
@@ -330,8 +340,11 @@ export class ComposerManager {
       const toStart = desired.filter((u) => !runningKey.has(`${u.id}@${u.node}`));
       await Promise.all(
         toStart.map((u) => {
-          this._appendLog(`Starting ${u.id} on ${u.node}…`);
-          return this._runAction(u.id, u.node, u.spec, "start");
+          const dynEnv = u.util != null ? { GPU_UTIL: u.util.toFixed(3) } : {};
+          this._appendLog(
+            `Starting ${u.id} on ${u.node}${u.util != null ? ` (gpu-util ${u.util.toFixed(2)})` : ""}…`
+          );
+          return this._runAction(u.id, u.node, u.spec, "start", dynEnv);
         })
       );
 
@@ -374,6 +387,15 @@ export class ComposerManager {
   _runUnits(assignment) {
     const units = [];
     const added = new Set();
+    // Per-node dynamic allocation gives each elastic (vLLM) model the GPU
+    // utilization it should launch with, given its co-residents on that node.
+    const utilByModel = {};
+    for (const node of Object.keys(assignment)) {
+      const alloc = allocateNode(this.catalog, node, assignment[node] || []);
+      for (const [id, info] of Object.entries(alloc.perModel || {})) {
+        if (info.util != null) utilByModel[id] = info.util;
+      }
+    }
     for (const node of Object.keys(assignment)) {
       for (const id of assignment[node] || []) {
         if (added.has(id)) continue;
@@ -384,18 +406,21 @@ export class ComposerManager {
         const spec = model.launch?.[launchNode];
         if (!spec) continue;
         added.add(id);
-        units.push({ id, node: launchNode, model, spec });
+        units.push({ id, node: launchNode, model, spec, util: utilByModel[id] });
       }
     }
     return units;
   }
 
   // ─── Runner (local + ssh), modeled on SetupManager._runComponent ─────────
-  _runAction(id, node, spec, action) {
+  _runAction(id, node, spec, action, dynEnv = {}) {
     if (this._disposed) return Promise.reject(new Error("disposed"));
     const actionSpec = spec[action];
     if (!actionSpec || !actionSpec.cmd) return Promise.resolve();
-    const extraEnv = spec.env && typeof spec.env === "object" ? spec.env : {};
+    const extraEnv = {
+      ...(spec.env && typeof spec.env === "object" ? spec.env : {}),
+      ...dynEnv, // dynamic GPU_UTIL from the per-node allocation
+    };
     const opts = { env: { ...process.env, ...extraEnv }, detached: true };
     let file;
     let args;

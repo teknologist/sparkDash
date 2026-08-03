@@ -573,7 +573,11 @@ export interface ComposerBrick {
   placement: "single" | "dual";
   /** Eligible nodes this brick can run on. */
   nodes: string[];
-  /** Estimated resident unified-RAM footprint (GB). */
+  /** Weight/fixed footprint floor (GB) that must fit. */
+  weightGB: number;
+  /** Max gpu-memory-utilization (0..1) when alone; null = fixed footprint (ds4/dual). */
+  maxUtil: number | null;
+  /** Floor footprint (GB) — equals weightGB; kept for compatibility. */
   ramGB: number;
   port: number | null;
   servedModel: string;
