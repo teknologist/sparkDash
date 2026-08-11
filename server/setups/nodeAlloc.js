@@ -75,5 +75,7 @@ export function allocateNode(catalog, nodeId, ids) {
   }
 
   const ramUsed = Object.values(perModel).reduce((s, x) => s + x.footprintGB, 0);
-  return { ok: ramUsed <= budget + 1, ramUsed, budget, cap, perModel };
+  // No slop: the old `budget + 1` let 117/116 verify as OK, and a ~1 GiB
+  // shortfall is exactly how a co-residence OOMs at engine init.
+  return { ok: ramUsed <= budget, ramUsed, budget, cap, perModel };
 }

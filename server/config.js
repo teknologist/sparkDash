@@ -30,8 +30,14 @@ const COMPOSITIONS_PATH =
 /** Path to the llama-swap gateway config the composer regenerates on Apply. */
 const LLAMA_SWAP_CONFIG_PATH =
   process.env.LLAMA_SWAP_CONFIG_PATH || "/home/eric/llama-swap/config.yaml";
-/** Per-node unified-memory reserve (GB) kept free of model budget (load headroom). */
-const NODE_RAM_RESERVE_GB = parseInt(process.env.NODE_RAM_RESERVE_GB || "12", 10);
+/**
+ * Per-node unified-memory reserve (GB) kept free of model budget (load headroom).
+ * Calibrated against the measured whole-node case: ds4-entrpi at ctx 200k really
+ * occupies ~112 GiB of the GB10's 121.69 GiB usable and serves fine, i.e. ~8 GiB
+ * of true headroom. With nodeCapacityGB stated as the real 121 (not the marketing
+ * 128), a 12 GB reserve would make that legitimate placement unschedulable.
+ */
+const NODE_RAM_RESERVE_GB = parseInt(process.env.NODE_RAM_RESERVE_GB || "8", 10);
 
 // ─── LLM probe timeout ──────────────────────────────────
 const LLM_PROBE_TIMEOUT_MS = 3000;

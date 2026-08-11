@@ -71,7 +71,8 @@ function allocateNodeClient(models: ComposerBrick[], capacity: number, budget: n
       util: Math.max(0.05, Math.min(0.95, foot[m.id] / capacity)),
     };
   const ramUsed = Object.values(perModel).reduce((s, x) => s + x.footprintGB, 0);
-  return { ok: ramUsed <= budget + 1, ramUsed, perModel };
+  // Must mirror server nodeAlloc.js exactly: no slop (a ~1 GiB shortfall OOMs).
+  return { ok: ramUsed <= budget, ramUsed, perModel };
 }
 
 function validateClient(catalog: ComposerCatalog, assignment: Assignment) {
