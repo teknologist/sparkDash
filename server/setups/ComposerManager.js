@@ -1,5 +1,5 @@
 import fs from "fs";
-import { spawn } from "child_process";
+import { spawn, execFile } from "child_process";
 import { ModelCatalog } from "./ModelCatalog.js";
 import { generateLlamaSwapConfig } from "./llamaSwapGen.js";
 import { allocateNode } from "./nodeAlloc.js";
@@ -134,6 +134,12 @@ export class ComposerManager {
     this._running = [];
     /** Last applied assignment (best-effort). */
     this._currentAssignment = null;
+    /**
+     * gpu-util each unit was LAUNCHED with, keyed `id@node`. A vLLM reservation
+     * is fixed at startup, so this is the only way to know whether a serving
+     * model still matches the plan or is squatting a stale (larger) share.
+     */
+    this._launchedUtil = this._loadLaunchedUtil();
     /** @type {null | (() => void)} */
     this.onChange = null;
 
@@ -198,6 +204,33 @@ export class ComposerManager {
     };
   }
 
+  /** Path of the launched-util sidecar (next to compositions.json). */
+  _launchedUtilPath() {
+    return COMPOSITIONS_PATH.replace(/[^/]+$/, "launched-util.json");
+  }
+
+  /**
+   * Launched utils survive a dashboard restart. Without this the map is empty on
+   * boot, every serving elastic model reads as "unknown", and the next apply
+   * needlessly re-launches healthy models (a multi-minute reload each).
+   */
+  _loadLaunchedUtil() {
+    try {
+      const d = JSON.parse(fs.readFileSync(this._launchedUtilPath(), "utf-8"));
+      return d && typeof d === "object" && !Array.isArray(d) ? d : {};
+    } catch {
+      return {};
+    }
+  }
+
+  _saveLaunchedUtil() {
+    try {
+      fs.writeFileSync(this._launchedUtilPath(), JSON.stringify(this._launchedUtil, null, 2));
+    } catch (e) {
+      this._appendLog(`[warn] could not persist launched utils: ${e.message}`);
+    }
+  }
+
   _loadPresets() {
     try {
       const data = JSON.parse(fs.readFileSync(COMPOSITIONS_PATH, "utf-8"));
@@ -240,8 +273,9 @@ export class ComposerManager {
 
   async _detect() {
     if (this._disposed || this._applying) return;
-    // Probe every eligible endpoint in PARALLEL — sequential probing stalls on
-    // each down endpoint's timeout and made the board lag reality.
+    // (1) Probe every eligible endpoint in PARALLEL — sequential probing stalls
+    // on each down endpoint's timeout and made the board lag reality. A model
+    // that answers /v1/models with its servedModel is READY (serving).
     const checks = [];
     for (const model of this.catalog.models) {
       const eligible = Array.isArray(model.nodes) ? model.nodes : Object.keys(model.launch || {});
@@ -258,17 +292,57 @@ export class ComposerManager {
                   port: ready.port,
                   servedModel: ready.servedModel || model.servedModel,
                   up: true,
+                  state: "ready",
                 }
               : null
           )
         );
       }
     }
-    const found = (await Promise.all(checks)).filter(Boolean);
-    // One entry per model (a model eligible on multiple nodes runs on one).
+    const readyFound = (await Promise.all(checks)).filter(Boolean);
+    const readyIds = new Set(readyFound.map((r) => r.id));
+
+    // (2) LOADING detection: a brick whose dedicated `container` is up on a node
+    // but whose API isn't serving yet is loading (weights + compile, minutes for
+    // big models). The API is down during load, so the only real-time signal is
+    // the node's container state — gather it with ONE `docker ps` per node, and
+    // only for nodes that actually have a not-ready container-brick (idle-cheap).
+    const containerBricks = [];
+    const nodesNeeded = new Set();
+    for (const model of this.catalog.models) {
+      if (!model.container || readyIds.has(model.id)) continue;
+      const eligible = Array.isArray(model.nodes) ? model.nodes : Object.keys(model.launch || {});
+      containerBricks.push({ model, eligible });
+      for (const node of eligible) nodesNeeded.add(node);
+    }
+    const contByNode = {};
+    await Promise.all(
+      [...nodesNeeded].map(async (node) => {
+        contByNode[node] = await this._nodeContainers(node);
+      })
+    );
+    const loadingFound = [];
+    for (const { model, eligible } of containerBricks) {
+      for (const node of eligible) {
+        if (contByNode[node]?.has(model.container)) {
+          const spec = model.launch?.[node] || model.launch?.[eligible[0]];
+          loadingFound.push({
+            id: model.id,
+            node,
+            port: spec?.ready?.port ?? model.port,
+            servedModel: model.servedModel || model.id,
+            up: false,
+            state: "loading",
+          });
+          break; // a model loads on one node
+        }
+      }
+    }
+
+    // (3) Merge — one entry per model; a serving endpoint wins over a loading one.
     const seen = new Set();
     const running = [];
-    for (const r of found) {
+    for (const r of [...readyFound, ...loadingFound]) {
       if (seen.has(r.id)) continue;
       seen.add(r.id);
       running.push(r);
@@ -276,6 +350,33 @@ export class ComposerManager {
     const changed = JSON.stringify(running) !== JSON.stringify(this._running);
     this._running = running;
     if (changed) this._emit();
+  }
+
+  /** node → exec target (local on spark1, ssh host elsewhere), from any launch spec. */
+  _nodeExec(node) {
+    for (const m of this.catalog.models) {
+      const spec = m.launch?.[node];
+      if (spec?.target === "local") return { target: "local" };
+      if (spec?.target === "ssh" && spec.host) return { target: "ssh", host: spec.host };
+    }
+    return null;
+  }
+
+  /** Set of running container names on a node (one `docker ps`); empty on any error. */
+  _nodeContainers(node) {
+    const info = this._nodeExec(node);
+    if (!info) return Promise.resolve(new Set());
+    const file = info.target === "ssh" ? "ssh" : "docker";
+    const args =
+      info.target === "ssh"
+        ? ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=6", "--", info.host, "docker ps --format '{{.Names}}'"]
+        : ["ps", "--format", "{{.Names}}"];
+    return new Promise((resolve) => {
+      execFile(file, args, { timeout: 6000 }, (err, stdout) => {
+        if (err) return resolve(new Set());
+        resolve(new Set(String(stdout).split("\n").map((s) => s.trim()).filter(Boolean)));
+      });
+    });
   }
 
   async _probeReady(ready) {
@@ -318,12 +419,33 @@ export class ComposerManager {
       const desiredKey = new Set(desired.map((u) => `${u.id}@${u.node}`));
       const runningKey = new Set(running.map((r) => `${r.id}@${r.node}`));
 
-      // Keep (don't touch) models already serving where the new config wants
-      // them — incremental apply, not a blanket teardown. Logged for visibility.
-      const kept = desired.filter((u) => runningKey.has(`${u.id}@${u.node}`));
-      for (const u of kept) this._appendLog(`Keeping ${u.id} on ${u.node} (already serving)`);
+      // A vLLM model reserves util×capacity at STARTUP and never shrinks. So a
+      // model that is already serving with a bigger util than this assignment
+      // grants it would squat that memory and starve the models we're about to
+      // start — the co-residence then OOMs even though verify() approved the
+      // plan. Such models must be RE-LAUNCHED at their new util, not "kept".
+      const alreadyKept = desired.filter((u) => runningKey.has(`${u.id}@${u.node}`));
+      const nodesGainingModels = new Set(
+        desired.filter((u) => !runningKey.has(`${u.id}@${u.node}`)).map((u) => u.node)
+      );
+      const needsRelaunch = (u) => {
+        if (u.util == null) return false; // fixed footprint (ds4/dual): no util knob
+        const prev = this._launchedUtil[`${u.id}@${u.node}`];
+        if (prev != null) return Math.abs(prev - u.util) > 0.02;
+        // Unknown launch util (started outside the composer, or before a server
+        // restart): only assume it is stale when this node's mix is changing.
+        return nodesGainingModels.has(u.node);
+      };
+      const toRelaunch = alreadyKept.filter(needsRelaunch);
+      const relaunchKey = new Set(toRelaunch.map((u) => `${u.id}@${u.node}`));
+      for (const u of alreadyKept) {
+        if (!relaunchKey.has(`${u.id}@${u.node}`)) {
+          this._appendLog(`Keeping ${u.id} on ${u.node} (already serving)`);
+        }
+      }
 
-      // Stop anything running that isn't desired on that same node.
+      // Stop anything running that isn't desired on that same node, PLUS the
+      // stale-reservation models above — freeing their memory before any start.
       const toStop = running.filter((r) => !desiredKey.has(`${r.id}@${r.node}`));
       for (const r of toStop) {
         const model = this.catalog.getModel(r.id);
@@ -333,23 +455,62 @@ export class ComposerManager {
           await this._runAction(r.id, r.node, spec, "stop").catch((e) =>
             this._appendLog(`[warn] stop ${r.id}: ${e.message}`)
           );
+          delete this._launchedUtil[`${r.id}@${r.node}`];
+          this._saveLaunchedUtil();
         }
       }
+      for (const u of toRelaunch) {
+        const prev = this._launchedUtil[`${u.id}@${u.node}`];
+        this._appendLog(
+          `Re-launching ${u.id} on ${u.node}: gpu-util ${
+            prev != null ? prev.toFixed(2) : "unknown"
+          } → ${u.util.toFixed(2)} (must shrink to fit its new co-residents)…`
+        );
+        await this._runAction(u.id, u.node, u.spec, "stop").catch((e) =>
+          this._appendLog(`[warn] stop ${u.id}: ${e.message}`)
+        );
+        delete this._launchedUtil[`${u.id}@${u.node}`];
+        this._saveLaunchedUtil();
+      }
 
-      // Start desired bricks not already serving on their target node.
-      const toStart = desired.filter((u) => !runningKey.has(`${u.id}@${u.node}`));
+      // Start desired bricks not already serving on their target node, plus the
+      // ones we just stopped for resizing.
+      const toStart = desired.filter(
+        (u) => !runningKey.has(`${u.id}@${u.node}`) || relaunchKey.has(`${u.id}@${u.node}`)
+      );
+      // Start SEQUENTIALLY within a node, in parallel ACROSS nodes.
+      //
+      // vLLM sizes its KV cache from a one-shot memory profile at init. Two
+      // engines profiling the same GPU at once each see the other's allocation
+      // mid-flight, so the later one can conclude there is nothing left and die
+      // with "No available memory for the cache blocks" — even when the plan
+      // fits. Waiting for each model to finish coming up before starting its
+      // node-mate makes every profile see a settled device.
+      const startsByNode = new Map();
+      for (const u of toStart) {
+        if (!startsByNode.has(u.node)) startsByNode.set(u.node, []);
+        startsByNode.get(u.node).push(u);
+      }
+      const startOne = async (u) => {
+        const dynEnv = u.util != null ? { GPU_UTIL: u.util.toFixed(3) } : {};
+        this._appendLog(
+          `Starting ${u.id} on ${u.node}${u.util != null ? ` (gpu-util ${u.util.toFixed(2)})` : ""}…`
+        );
+        // Remember what we launched with so a later apply can tell whether the
+        // live reservation still matches the plan (see needsRelaunch above).
+        this._launchedUtil[`${u.id}@${u.node}`] = u.util != null ? u.util : null;
+        this._saveLaunchedUtil();
+        await this._runAction(u.id, u.node, u.spec, "start", dynEnv);
+        await this._waitReady([u]); // settle before this node's next model
+      };
       await Promise.all(
-        toStart.map((u) => {
-          const dynEnv = u.util != null ? { GPU_UTIL: u.util.toFixed(3) } : {};
-          this._appendLog(
-            `Starting ${u.id} on ${u.node}${u.util != null ? ` (gpu-util ${u.util.toFixed(2)})` : ""}…`
-          );
-          return this._runAction(u.id, u.node, u.spec, "start", dynEnv);
+        [...startsByNode.values()].map(async (units) => {
+          for (const u of units) {
+            if (this._cancelled) break;
+            await startOne(u);
+          }
         })
       );
-
-      // Wait for the started bricks to answer a smoke chat.
-      await this._waitReady(toStart);
 
       // Regenerate + write the llama-swap gateway (hot-reloads via -watch-config).
       try {
@@ -494,7 +655,13 @@ export class ComposerManager {
   async _waitReady(units) {
     const endpoints = units.map((u) => u.spec.ready).filter(Boolean);
     if (endpoints.length === 0) return;
-    const deadline = Date.now() + READY_TIMEOUT_MS;
+    // Honour each brick's declared startTimeoutMs: a cold 35B/NVFP4 recreate is
+    // weights + torch.compile + cudagraph capture, which routinely exceeds the
+    // 3-minute default. (This mattered once starts became sequential per node —
+    // each model now gets its own window instead of sharing one.)
+    const declared = units.map((u) => Number(u.spec.startTimeoutMs) || 0);
+    const budget = Math.max(READY_TIMEOUT_MS, ...declared);
+    const deadline = Date.now() + budget;
     const pending = new Set(endpoints);
     while (Date.now() < deadline) {
       if (this._cancelled) throw new Error("cancelled during readiness wait");

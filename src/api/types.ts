@@ -235,6 +235,8 @@ export interface RunningModel {
   port: number;
   /** true when the endpoint answers /v1/models (else starting/down) */
   up: boolean;
+  /** "ready" (serving) or "loading" (container up, API not answering yet) */
+  state?: "ready" | "loading";
   /** whole-cluster (dual/TP=2) model — shown on every node it spans */
   dual?: boolean;
 }

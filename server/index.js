@@ -160,6 +160,7 @@ function runningModelsBySpark() {
         model: r.servedModel || r.id,
         port: r.port,
         up: r.up !== false,
+        ...(r.state ? { state: r.state } : {}),
         ...(isDual(r.id) ? { dual: true } : {}),
       });
     }

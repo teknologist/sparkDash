@@ -283,12 +283,19 @@ function SparkCard({
                     className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] text-text ${
                       m.dual ? "border-warning/50 bg-warning/10" : "border-border bg-surface-elevated"
                     }`}
-                    title={`port ${m.port} · ${m.up ? "serving" : "starting / not ready"}${m.dual ? " · whole-cluster (dual TP=2)" : ""}`}
+                    title={`port ${m.port} · ${
+                      m.up ? "serving" : m.state === "loading" ? "loading (model initializing)" : "starting / not ready"
+                    }${m.dual ? " · whole-cluster (dual TP=2)" : ""}`}
                   >
                     <span
                       className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.up ? "bg-success" : "bg-warning animate-pulse"}`}
                     />
                     {m.model}
+                    {!m.up && m.state === "loading" && (
+                      <span className="rounded bg-warning/25 px-1 text-[8px] font-semibold uppercase text-warning">
+                        loading
+                      </span>
+                    )}
                     {m.dual && (
                       <span className="rounded bg-warning/25 px-1 text-[8px] font-semibold uppercase text-warning">
                         dual
