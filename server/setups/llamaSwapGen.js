@@ -31,6 +31,8 @@ export function generateLlamaSwapConfig(catalog, assignment) {
   }
 
   const shArgs = (a) => (Array.isArray(a) ? a : []).join(" ").trim();
+  // Escape for a double-quoted YAML scalar (descriptions are free text).
+  const yamlStr = (v) => String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const envPrefix = (env) =>
     env && typeof env === "object"
       ? Object.entries(env)
@@ -77,9 +79,43 @@ export function generateLlamaSwapConfig(catalog, assignment) {
 
     lines.push(`  "${served}":`);
     lines.push(`    cmd: bash -c '${guard} || { ${startCmd}; }; ${keeper}'`);
-    lines.push(`    cmdStop: ${stopCmd}`);
+    // cmdStop is deliberately a NO-OP. llama-swap issues cmdStop for every
+    // *loaded* model when it reloads this file — and the composer rewrites this
+    // file on every Apply. A real stop command there therefore tears down
+    // models the composer just planned/started (observed: both spark2 servers
+    // shut down within 1s of "reloading configuration"). Lifecycle belongs to
+    // the composer, which owns the per-node memory budget; llama-swap only
+    // routes. `cmd` above stays idempotent (it attaches to an already-serving
+    // backend) so on-demand load still works.
+    lines.push("    cmdStop: /usr/bin/true");
+    if (stopCmd) lines.push(`    # composer stop (not used by llama-swap): ${stopCmd}`);
     lines.push(`    proxy: "${base}"`);
     lines.push("    checkEndpoint: /v1/models");
+
+    // Advertise the model's real capabilities on GET /v1/models. llama-swap
+    // SYNTHESISES that response from this config rather than proxying the
+    // backend's, so without these a client sees no context limit or modality
+    // and cannot size requests (vLLM's own max_model_len never reaches it).
+    // `capabilities.context` surfaces as top-level `context_length`.
+    const m = b.model;
+    if (m.displayName) lines.push(`    name: "${yamlStr(m.displayName)}"`);
+    if (m.description) lines.push(`    description: "${yamlStr(m.description)}"`);
+    const ins = Array.isArray(m.inputs) && m.inputs.length ? m.inputs : ["text"];
+    const outs = Array.isArray(m.outputs) && m.outputs.length ? m.outputs : ["text"];
+    lines.push("    capabilities:");
+    lines.push(`      in: [${ins.join(", ")}]`);
+    lines.push(`      out: [${outs.join(", ")}]`);
+    // Only assert tool calling where a tool parser is actually configured;
+    // omitted when unverified rather than guessed.
+    if (typeof m.tools === "boolean") lines.push(`      tools: ${m.tools}`);
+    if (Number(m.maxContext) > 0) lines.push(`      context: ${Number(m.maxContext)}`);
+    lines.push("    metadata:");
+    lines.push(`      node: ${b.launchNode}`);
+    lines.push(`      port: ${port}`);
+    if (m.backend) lines.push(`      backend: ${m.backend}`);
+    if (m.quant) lines.push(`      quantization: "${yamlStr(m.quant)}"`);
+    if (Number(m.weightGB) > 0) lines.push(`      weightsGB: ${Number(m.weightGB)}`);
+    lines.push(`      placement: ${m.placement === "dual" ? "dual (both nodes, TP=2)" : "single"}`);
     lines.push("");
 
     // Group by the node the brick physically serves on (its head node).

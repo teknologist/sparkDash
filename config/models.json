@@ -13,6 +13,11 @@
       "port": 8000,
       "servedModel": "deepseek-v4-flash",
       "notes": "Single-node ds4 (Entrpi/ds4 fork v0.5.x, CUDA sm_121) serving the DeepSeek-V4-Flash-0731 IQ2XXS/Q2K GGUF (~81 GiB, in-RAM) + DSpark, ctx 200k. Runnable on either node (ds4-entrpi.sh present on both; gguf+drafter cached on both). Backend port 8000; clients reach it via the llama-swap gateway.",
+      "maxContext": 200000,
+      "inputs": ["text"],
+      "outputs": ["text"],
+      "quant": "IQ2_XXS/Q2_K GGUF",
+      "description": "DeepSeek V4 Flash 0731 (GGUF, in-RAM) served by ds4 with DSpark speculative decode. Single node, 200k context.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -45,6 +50,12 @@
       "servedModel": "laguna-s",
       "container": "laguna-s",
       "notes": "NVFP4 + DFlash spec-decode (ENABLE_SPEC=1), ctx 256k, util 0.80. MEASURED: weights 69.3 GiB (incl. drafter) + ~2.4 overhead + >=9.2 GiB KV for one 256k request => 81 GB floor (util >=0.67); ~8.6 min to load. Backend port 8002 (unique so it can co-reside with other single-node models; clients reach it via the llama-swap gateway).",
+      "maxContext": 262144,
+      "inputs": ["text"],
+      "outputs": ["text"],
+      "tools": true,
+      "quant": "NVFP4",
+      "description": "Laguna-S 2.1 NVFP4 coding model with DFlash speculative decode and poolside_v1 tool calling. 256k context.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -79,6 +90,12 @@
       "servedModel": "ornith-35b",
       "container": "ornith-ornith-35b",
       "notes": "FP8, ctx 256k, util 0.42 (~54 GiB). Backend port 8003 (unique so it can co-reside with other single-node models). Runnable on either node (ornith.sh + model + image on both); clients reach it via the llama-swap gateway.",
+      "maxContext": 262144,
+      "inputs": ["text"],
+      "outputs": ["text"],
+      "tools": false,
+      "quant": "FP8",
+      "description": "Ornith 1.0 35B FP8. Text generation, 256k context.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -113,6 +130,12 @@
       "servedModel": "muse-glimmer",
       "container": "muse-glimmer",
       "notes": "Meta Muse-Glimmer-30B (Preyazz/Muse-Glimmer-30B-NVFP4) — multimodal image-text-to-text, dense 30B, arch muse_glimmer. Needs vLLM>=0.28 (vllm-muse:latest, PR vllm#51655). NVFP4 (Blackwell FP4), ctx 128k, util 0.34 (~41 GB: 21.8 weights + 4.8 DFlash drafter + KV). DFlash spec-decode ON (7 tokens; the recipe's 15 device-side-asserts on NVFP4) → ~27 t/s vs 13 without. Backend port 8005; clients reach it via the llama-swap gateway.",
+      "maxContext": 131072,
+      "inputs": ["text", "image"],
+      "outputs": ["text"],
+      "tools": true,
+      "quant": "NVFP4",
+      "description": "Meta Muse Glimmer 30B NVFP4. Multimodal (text+image), muse_glimmer tool calling and reasoning, DFlash speculative decode. 128k context.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -146,6 +169,12 @@
       "port": 8004,
       "servedModel": "qwen3-vl-ocr",
       "notes": "NVFP4, ctx 64k, util 0.30-0.32. MEASURED: weights 20.97 GiB + ~4.8 overhead + ~8.0 GiB KV for one 64k request => 34 GB floor (little elasticity; ctx 64k drives the KV floor). (elastic KV — auto-sized to gpu-memory-utilization, so footprint scales and the declared floor stays honest). Backend port 8004 (moved off 8000 so it can co-reside with entrpi/dual). Runnable on either node (model + vllm-svc.sh + image on both); clients reach it via the llama-swap gateway.",
+      "maxContext": 65536,
+      "inputs": ["text", "image"],
+      "outputs": ["text"],
+      "tools": false,
+      "quant": "NVFP4",
+      "description": "Qwen3-VL 32B NVFP4 vision/OCR specialist, up to 8 images per prompt. Served at 64k context.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -177,6 +206,12 @@
       "port": 8001,
       "servedModel": "Qwen3.6-27B",
       "notes": "nvidia/Qwen3.6-27B-NVFP4. Elastic KV (auto-sized to gpu-memory-utilization); footprint scales with util so it co-resides. Backend port 8001. Runnable on either node (model + vllm-svc.sh + image on both); clients reach it via the llama-swap gateway.",
+      "maxContext": 262144,
+      "inputs": ["text", "image"],
+      "outputs": ["text"],
+      "tools": false,
+      "quant": "NVFP4",
+      "description": "Qwen3.6 27B NVFP4. Multimodal (text+image) with qwen3 reasoning parser, for extraction and analysis. 256k context.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -207,6 +242,11 @@
       "port": 8000,
       "servedModel": "deepseek-v4-flash-0731",
       "notes": "0731 model (deepseek-ai/DeepSeek-V4-Flash-0731) NVFP4 + DSpark spec-decode, TP=2 over RoCE, ctx 1M. Whole-cluster (both nodes). vLLM via ~/deploy/dspark with .env.dspark.0731 (project deepseek-v4-flash-0731). Model must be cached on both nodes first: ENV_FILE=~/deploy/dspark/.env.dspark.0731 ~/deploy/dspark/prepare-dspark-model-cache.sh",
+      "maxContext": 1048576,
+      "inputs": ["text"],
+      "outputs": ["text"],
+      "quant": "NVFP4",
+      "description": "DeepSeek V4 Flash 0731 NVFP4 across BOTH nodes (TP=2 over RoCE) with DSpark speculative decode. 1M context.",
       "launch": {
         "spark1": {
           "target": "local",
@@ -228,6 +268,11 @@
       "port": 8000,
       "servedModel": "MiMo-V2.5-NVFP4",
       "notes": "Whole-cluster: spark1 head + spark2 worker over Ray+RoCE. GMU 0.83, ctx 1M. Occupies both nodes.",
+      "maxContext": 1048576,
+      "inputs": ["text"],
+      "outputs": ["text"],
+      "quant": "NVFP4",
+      "description": "MiMo V2.5 NVFP4 across BOTH nodes (TP=2 over Ray/RoCE). 1M context.",
       "launch": {
         "spark1": {
           "target": "local",
