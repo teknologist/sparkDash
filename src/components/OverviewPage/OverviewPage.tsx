@@ -277,25 +277,56 @@ function SparkCard({
             <div className="mt-3 border-t border-border pt-2.5">
               <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">Models</div>
               <div className="flex flex-wrap gap-1.5">
-                {spark.runningModels.map((m) => (
+                {spark.runningModels.map((m) => {
+                  // Per-model throughput. The LLM probe reports one entry per
+                  // monitored port carrying modelId (no port field), and that
+                  // modelId equals the served name shown on the chip — so join
+                  // on it to put each model's tok/s next to its own name rather
+                  // than only in the node total below.
+                  const met = Array.isArray(spark.metrics.llm)
+                    ? spark.metrics.llm.find((l) => l.available && l.modelId === m.model)
+                    : undefined;
+                  return (
                   <span
                     key={`${m.model}-${m.port}`}
                     className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] text-text ${
                       m.dual ? "border-warning/50 bg-warning/10" : "border-border bg-surface-elevated"
                     }`}
-                    title={`port ${m.port} · ${m.up ? "serving" : "starting / not ready"}${m.dual ? " · whole-cluster (dual TP=2)" : ""}`}
+                    title={`port ${m.port} · ${
+                      m.up ? "serving" : m.state === "loading" ? "loading (model initializing)" : "starting / not ready"
+                    }${m.dual ? " · whole-cluster (dual TP=2)" : ""}`}
                   >
                     <span
                       className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.up ? "bg-success" : "bg-warning animate-pulse"}`}
                     />
                     {m.model}
+                    {!m.up && m.state === "loading" && (
+                      <span className="rounded bg-warning/25 px-1 text-[8px] font-semibold uppercase text-warning">
+                        loading
+                      </span>
+                    )}
                     {m.dual && (
                       <span className="rounded bg-warning/25 px-1 text-[8px] font-semibold uppercase text-warning">
                         dual
                       </span>
                     )}
+                    {met && (
+                      <span
+                        className={`font-tabular ${
+                          met.generationTps > 0 ? "text-accent" : "text-muted/70"
+                        }`}
+                        title={
+                          met.generationTps > 0
+                            ? `${met.generationTps.toFixed(1)} generation tok/s`
+                            : "measured, currently idle"
+                        }
+                      >
+                        {met.generationTps > 0 ? `${met.generationTps.toFixed(0)} t/s` : "idle"}
+                      </span>
+                    )}
                   </span>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -315,7 +346,10 @@ function SparkCard({
                 </span>
                 <span className="text-sm font-normal text-muted"> tok/s</span>
                 {active.length > 1 && (
-                  <span className="text-sm font-normal text-muted"> · {active.length} models</span>
+                  <span className="text-sm font-normal text-muted">
+                    {" "}
+                    · node total, {active.length} models
+                  </span>
                 )}
                 {tpsHistory.length >= 2 && (
                   <div className="mt-2">

@@ -76,7 +76,7 @@
           "ready": [
             { "host": "127.0.0.1", "port": 8000, "servedModel": "ornith-35b" },
             { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
-            { "host": "192.168.10.114", "port": 8001, "servedModel": "qwen3.6-extract" }
+            { "host": "192.168.10.114", "port": 8001, "servedModel": "Qwen3.6-27B" }
           ]
         }
       ]
@@ -129,7 +129,7 @@
           "ready": [
             { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" },
             { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
-            { "host": "192.168.10.114", "port": 8001, "servedModel": "qwen3.6-extract" }
+            { "host": "192.168.10.114", "port": 8001, "servedModel": "Qwen3.6-27B" }
           ]
         }
       ]
@@ -152,7 +152,7 @@
           "ready": [
             { "host": "127.0.0.1", "port": 8000, "servedModel": "laguna-s" },
             { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
-            { "host": "192.168.10.114", "port": 8001, "servedModel": "qwen3.6-extract" }
+            { "host": "192.168.10.114", "port": 8001, "servedModel": "Qwen3.6-27B" }
           ]
         }
       ]

@@ -235,6 +235,8 @@ export interface RunningModel {
   port: number;
   /** true when the endpoint answers /v1/models (else starting/down) */
   up: boolean;
+  /** "ready" (serving) or "loading" (container up, API not answering yet) */
+  state?: "ready" | "loading";
   /** whole-cluster (dual/TP=2) model — shown on every node it spans */
   dual?: boolean;
 }
@@ -573,7 +575,11 @@ export interface ComposerBrick {
   placement: "single" | "dual";
   /** Eligible nodes this brick can run on. */
   nodes: string[];
-  /** Estimated resident unified-RAM footprint (GB). */
+  /** Weight/fixed footprint floor (GB) that must fit. */
+  weightGB: number;
+  /** Max gpu-memory-utilization (0..1) when alone; null = fixed footprint (ds4/dual). */
+  maxUtil: number | null;
+  /** Floor footprint (GB) — equals weightGB; kept for compatibility. */
   ramGB: number;
   port: number | null;
   servedModel: string;

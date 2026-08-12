@@ -160,14 +160,27 @@ function runningModelsBySpark() {
         model: r.servedModel || r.id,
         port: r.port,
         up: r.up !== false,
+        ...(r.state ? { state: r.state } : {}),
         ...(isDual(r.id) ? { dual: true } : {}),
       });
     }
   }
   // Fallback: anything setupManager is tracking that the catalog probe missed.
+  //
+  // The composer is AUTHORITATIVE for catalog bricks, so a legacy setup entry is
+  // only additional information when it names a model the catalog doesn't know.
+  // Otherwise it duplicates: model-setups.json still lists pre-unique-port
+  // numbers (ornith 8000, ocr 8000), which no longer match the live ports
+  // (8003 / 8004), so the old port+model dedupe let them through and node cards
+  // rendered a phantom second "ornith-35b @8000 (down)" beside the real one.
+  const knownModel = (name) =>
+    (cat?.models || []).some((b) => b.servedModel === name || b.id === name);
   for (const m of setupManager.getActiveModels()) {
     const node = hostToSparkId(m.host);
-    if (node) push(node, { model: m.modelId || m.servedModel, port: m.port, up: m.up });
+    if (!node) continue;
+    const name = m.modelId || m.servedModel;
+    if (knownModel(name)) continue; // composer already reports (or omits) it
+    push(node, { model: name, port: m.port, up: m.up });
   }
   return bySpark;
 }

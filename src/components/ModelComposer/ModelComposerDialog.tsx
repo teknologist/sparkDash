@@ -23,7 +23,58 @@ interface NodeVerdict {
   ramUsed: number;
   budget: number;
   over: boolean;
+  perModel: Record<string, { footprintGB: number; util: number | null }>;
 }
+
+/**
+ * Dynamic per-node allocation (mirror of server/setups/nodeAlloc.js). vLLM
+ * models (maxUtil set) are elastic — weights are the floor, KV cache scales to
+ * fill the node; fixed models (ds4/dual) take weightGB. Water-fills the budget.
+ */
+function allocateNodeClient(models: ComposerBrick[], capacity: number, budget: number) {
+  const weightOf = (m: ComposerBrick) => Number(m.weightGB ?? m.ramGB) || 0;
+  const isElastic = (m: ComposerBrick) => Number(m.maxUtil) > 0;
+  const fixed = models.filter((m) => !isElastic(m));
+  const elastic = models.filter((m) => isElastic(m));
+  const fixedGB = fixed.reduce((s, m) => s + weightOf(m), 0);
+  const weightSum = elastic.reduce((s, m) => s + weightOf(m), 0);
+  const perModel: Record<string, { footprintGB: number; util: number | null }> = {};
+  for (const m of fixed) perModel[m.id] = { footprintGB: Math.round(weightOf(m)), util: null };
+  if (fixedGB + weightSum > budget) {
+    for (const m of elastic) perModel[m.id] = { footprintGB: Math.round(weightOf(m)), util: null };
+    return { ok: false, ramUsed: Math.round(fixedGB + weightSum), perModel };
+  }
+  const avail = budget - fixedGB;
+  const foot: Record<string, number> = {};
+  const capGB: Record<string, number> = {};
+  for (const m of elastic) {
+    foot[m.id] = weightOf(m);
+    capGB[m.id] = Math.min((Number(m.maxUtil) || 0) * capacity, avail);
+  }
+  let remaining = avail - weightSum;
+  for (let i = 0; i < 200 && remaining > 0.5; i++) {
+    const uncapped = elastic.filter((m) => foot[m.id] < capGB[m.id] - 1e-6);
+    if (!uncapped.length) break;
+    const totalW = uncapped.reduce((s, m) => s + weightOf(m), 0) || uncapped.length;
+    let dist = 0;
+    for (const m of uncapped) {
+      const add = Math.min(remaining * (weightOf(m) / totalW), capGB[m.id] - foot[m.id]);
+      foot[m.id] += add;
+      dist += add;
+    }
+    remaining -= dist;
+    if (dist < 0.5) break;
+  }
+  for (const m of elastic)
+    perModel[m.id] = {
+      footprintGB: Math.round(foot[m.id]),
+      util: Math.max(0.05, Math.min(0.95, foot[m.id] / capacity)),
+    };
+  const ramUsed = Object.values(perModel).reduce((s, x) => s + x.footprintGB, 0);
+  // Must mirror server nodeAlloc.js exactly: no slop (a ~1 GiB shortfall OOMs).
+  return { ok: ramUsed <= budget, ramUsed, perModel };
+}
+
 function validateClient(catalog: ComposerCatalog, assignment: Assignment) {
   const byId = new Map(catalog.models.map((m) => [m.id, m]));
   const nodes = Object.keys(catalog.nodeCapacityGB);
@@ -44,22 +95,23 @@ function validateClient(catalog: ComposerCatalog, assignment: Assignment) {
 
   for (const n of nodes) {
     const ids = assignment[n] || [];
-    let ram = 0;
     const ports = new Map<number, string>();
+    const nodeModels: ComposerBrick[] = [];
     for (const id of ids) {
       const m = byId.get(id);
       if (!m) continue;
       if (!m.nodes.includes(n)) errors.push(`${m.displayName} can't run on ${n}`);
-      ram += m.ramGB || 0;
+      nodeModels.push(m);
       if (m.port != null) {
         if (ports.has(m.port)) errors.push(`Port ${m.port} conflict on ${n}`);
         else ports.set(m.port, id);
       }
     }
-    const budget = (catalog.nodeCapacityGB[n] ?? 128) - catalog.reserveGB;
-    const over = ram > budget;
-    if (over) errors.push(`${n} over budget: ${ram} > ${budget} GB`);
-    perNode[n] = { ramUsed: ram, budget, over };
+    const capacity = catalog.nodeCapacityGB[n] ?? 128;
+    const budget = capacity - catalog.reserveGB;
+    const alloc = allocateNodeClient(nodeModels, capacity, budget);
+    if (!alloc.ok) errors.push(`${n} over budget: ${alloc.ramUsed} GB of weights > ${budget} GB`);
+    perNode[n] = { ramUsed: alloc.ramUsed, budget, over: !alloc.ok, perModel: alloc.perModel };
   }
   return { ok: errors.length === 0, perNode, errors };
 }
@@ -75,12 +127,20 @@ function BrickTile({
   onDragStart,
   compact,
   onRemove,
+  footprintGB,
+  util,
 }: {
   brick: ComposerBrick;
   onDragStart?: () => void;
   compact?: boolean;
   onRemove?: () => void;
+  footprintGB?: number;
+  util?: number | null;
 }) {
+  // When placed, show the dynamically-allocated footprint (shrinks with co-residents);
+  // fall back to the brick's weight floor in the palette.
+  const shownGB = footprintGB != null ? Math.round(footprintGB) : brick.ramGB;
+  const elastic = footprintGB != null && util != null;
   return (
     <div
       draggable
@@ -110,7 +170,12 @@ function BrickTile({
           dual
         </span>
       )}
-      <span className="ml-auto shrink-0 font-tabular text-[11px] text-muted">{brick.ramGB} GB</span>
+      <span
+        className="ml-auto shrink-0 font-tabular text-[11px] text-muted"
+        title={elastic ? `gpu-memory-utilization ${util!.toFixed(2)}` : undefined}
+      >
+        {shownGB} GB{elastic ? ` · ${util!.toFixed(2)}` : ""}
+      </span>
       {onRemove && (
         <button
           type="button"
@@ -460,7 +525,16 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
                       ids.map((id) => {
                         const m = byId.get(id);
                         if (!m) return null;
-                        return <BrickTile key={id} brick={m} onRemove={() => removeBrick(id)} />;
+                        const alloc = v.perModel?.[id];
+                        return (
+                          <BrickTile
+                            key={id}
+                            brick={m}
+                            footprintGB={alloc?.footprintGB}
+                            util={alloc?.util}
+                            onRemove={() => removeBrick(id)}
+                          />
+                        );
                       })
                     )}
                   </div>

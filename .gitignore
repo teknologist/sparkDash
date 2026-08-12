@@ -7,6 +7,7 @@ config/.secrets-key
 config/bench-history.json
 config/showcase-history.json
 config/compositions.json
+config/launched-util.json
 config/gpu-memory.json
 config/gpu-memory.json.*
 config/bench-exports/

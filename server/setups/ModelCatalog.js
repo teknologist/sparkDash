@@ -85,7 +85,9 @@ export class ModelCatalog {
         backend: m.backend || null,
         placement: m.placement === "dual" ? "dual" : "single",
         nodes: Array.isArray(m.nodes) ? m.nodes : Object.keys(m.launch || {}),
-        ramGB: Number(m.ramGB) || 0,
+        weightGB: Number(m.weightGB != null ? m.weightGB : m.ramGB) || 0,
+        maxUtil: Number(m.maxUtil) || null,
+        ramGB: Number(m.weightGB != null ? m.weightGB : m.ramGB) || 0, // floor (compat)
         port: Number(m.port) || null,
         servedModel: m.servedModel || m.id,
         notes: m.notes || "",
