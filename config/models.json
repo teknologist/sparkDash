@@ -251,9 +251,9 @@
         "spark1": {
           "target": "local",
           "startTimeoutMs": 1200000,
-          "start": { "cmd": "/home/eric/sparkDash/deploy/deepseek-v4-0731.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/sparkDash/deploy/deepseek-v4-0731.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/sparkDash/deploy/deepseek-v4-0731.sh", "args": ["status"] },
+          "start": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["status"] },
           "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-0731" }
         }
       }
@@ -278,8 +278,8 @@
           "target": "local",
           "cwd": "/home/eric/deploy/mimo",
           "startTimeoutMs": 1200000,
-          "start": { "cmd": "/home/eric/sparkDash/deploy/mimo/mimo-svc.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/sparkDash/deploy/mimo/mimo-svc.sh", "args": ["stop"] },
+          "start": { "cmd": "/home/eric/deploy/mimo/mimo-svc.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/deploy/mimo/mimo-svc.sh", "args": ["stop"] },
           "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8000/v1/models >/dev/null 2>&1 && echo up || echo down"] },
           "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "MiMo-V2.5-NVFP4" }
         }

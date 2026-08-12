@@ -51,9 +51,9 @@
         {
           "id": "deepseek-v4-0731-entrpi",
           "target": "local",
-          "start": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/ds4-entrpi.sh", "args": ["status"] },
+          "start": { "cmd": "/home/eric/sparkDash/deploy/ds4-entrpi.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/sparkDash/deploy/ds4-entrpi.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/sparkDash/deploy/ds4-entrpi.sh", "args": ["status"] },
           "startTimeoutMs": 600000,
           "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" }]
         }
@@ -102,7 +102,7 @@
           "id": "laguna",
           "target": "ssh",
           "host": "Spark2",
-          "cmd": "~/deploy/laguna/laguna-ctl.sh",
+          "cmd": "/home/eric/sparkDash/deploy/laguna/laguna-ctl.sh",
           "env": { "ENABLE_SPEC": "1" },
           "start": { "args": ["start"] },
           "stop": { "args": ["stop"] },
