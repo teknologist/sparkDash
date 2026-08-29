@@ -313,15 +313,25 @@ function SparkCard({
                     {met && (
                       <span
                         className={`font-tabular ${
-                          met.generationTps > 0 ? "text-accent" : "text-muted/70"
+                          met.generationTps > 0
+                            ? "text-accent"
+                            : met.phase === "prefill"
+                              ? "text-warning"
+                              : "text-muted/70"
                         }`}
                         title={
                           met.generationTps > 0
                             ? `${met.generationTps.toFixed(1)} generation tok/s`
-                            : "measured, currently idle"
+                            : met.phase === "prefill"
+                              ? "prefilling — vLLM books prompt tokens at completion, so no live prefill rate exists"
+                              : "measured, currently idle"
                         }
                       >
-                        {met.generationTps > 0 ? `${met.generationTps.toFixed(0)} t/s` : "idle"}
+                        {met.generationTps > 0
+                          ? `${met.generationTps.toFixed(0)} t/s`
+                          : met.phase === "prefill"
+                            ? "prefill"
+                            : "idle"}
                       </span>
                     )}
                   </span>

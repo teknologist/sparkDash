@@ -447,6 +447,29 @@ export function LlmPanel({
             </div>
           </div>
 
+          {/* Prefill is a completion spike, not a live rate: vLLM books prompt
+              tokens when the request finishes, so a long prefill reads 0 here.
+              The phase pill is what tells you prefill work is actually running. */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted">Prefill tok/s</span>
+            <div className="flex items-center gap-2">
+              {llm?.phase === "prefill" && (
+                <span
+                  className="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning"
+                  title="Request in flight, no tokens emitted yet. vLLM exposes no live prefill counter."
+                >
+                  prefilling
+                </span>
+              )}
+              <span
+                className="font-tabular text-sm text-muted"
+                title="Booked at request completion, so this reads 0 during a prefill and spikes at the end."
+              >
+                {(llm?.prefillTps ?? 0).toFixed(1)}
+              </span>
+            </div>
+          </div>
+
           <div className="grid grid-cols-4 gap-2 border-t border-border pt-3">
             <div className="space-y-0.5">
               <div className="text-[10px] uppercase tracking-wide text-muted">Slots</div>

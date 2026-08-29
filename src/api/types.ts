@@ -174,7 +174,14 @@ export interface LlmMetrics {
   slotsActive: number;
   slotsTotal: number;
   generationTps: number;
+  /**
+   * Prefill tok/s. NOT a live rate: vLLM books prompt tokens at request
+   * completion, so this is 0 during a prefill and spikes when it finishes.
+   * Use `phase` to tell a running prefill apart from an idle engine.
+   */
   prefillTps: number;
+  /** Coarse engine phase derived from requestsRunning + generationTps. */
+  phase?: "prefill" | "decode" | "idle";
   /** Cumulative total output (generation) tokens as reported by the LLM server */
   totalOutputTokens: number;
   /** vLLM KV cache usage fraction (0–1). null when backend !== vllm or unreachable. */

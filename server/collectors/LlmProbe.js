@@ -965,6 +965,7 @@ export class LlmProbe {
       slotsTotal: this.slotsTotal,
       generationTps: this.generationTps,
       prefillTps: this.prefillTps,
+      phase: this._inferPhase(),
       totalOutputTokens: this.totalOutputTokens,
       kvCacheUsage: this.kvCacheUsage,
       requestsRunning: this.requestsRunning,
@@ -980,6 +981,28 @@ export class LlmProbe {
     };
   }
 
+  /**
+   * Coarse engine phase, because no scrapeable counter moves during prefill.
+   *
+   * vLLM books `prompt_tokens_total` (and even the per-iteration
+   * `iteration_tokens_total` histogram) at request COMPLETION, not per chunk:
+   * measured 2026-08-26 on the 0731 TP=2 stack, a 28,609-token uncached prefill
+   * left both counters frozen for ~16 s and then jumped in one step, while the
+   * engine's own log line reported `Avg prompt throughput: 2860.6 tokens/s`.
+   * So `prefillTps` is a completion spike, not a live rate, and a long prefill
+   * reads 0 tok/s — indistinguishable from idle unless we say otherwise.
+   *
+   * `num_requests_running` IS live, so: work in flight with no tokens coming
+   * out means we are prefilling.
+   *
+   * @returns {"prefill"|"decode"|"idle"}
+   */
+  _inferPhase() {
+    if (this.generationTps > 0) return "decode";
+    if (Number(this.requestsRunning) > 0) return "prefill";
+    return "idle";
+  }
+
   _defaultLlm() {
     return {
       available: false,
@@ -992,6 +1015,7 @@ export class LlmProbe {
       slotsTotal: 0,
       generationTps: 0,
       prefillTps: 0,
+      phase: "idle",
       totalOutputTokens: 0,
       kvCacheUsage: null,
       requestsRunning: null,
