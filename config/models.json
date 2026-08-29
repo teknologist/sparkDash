@@ -39,6 +39,33 @@
       }
     },
     {
+      "id": "deepseek-v4-flash-0731-solo",
+      "displayName": "DeepSeek V4 Flash 0731 (SparkInfer 1-node)",
+      "backend": "vllm",
+      "placement": "single",
+      "nodes": ["spark1"],
+      "weightGB": 113,
+      "port": 8000,
+      "servedModel": "deepseek-v4-flash-0731-solo",
+      "notes": "Single-node 0731 via MiaAI-Lab/DeepSeek-v4-Flash-One-DGX-Spark at ~/deploy/ds4-one (docker compose, vLLM 26.02 + SparkInfer kernels). EXL3 3.0bpw MCG/TR3 on a REAP-pruned K216 checkpoint (216/256 experts), ~99.5 GiB, native 432 B NVFP4 KV records, DSpark K5 spec-decode, 340k ctx at util 0.93 (KV pool ~348.8k tokens, 1.03x). Server default thinking is ON at effort max. NOT upstream's 384k/0.94: that claims 114.39 of 121.69 GiB and leaves only 7.30 GiB for a host whose baseline is ~6.0 GiB, so the kernel OOM-killed VLLM::EngineCore twice on 2026-08-26 right after KV sizing; util 0.935 yields only 380.2k tokens so 384k is unreachable at any safer util. See deploy/ds4-one.sh for the full arithmetic. TAKES THE WHOLE NODE: weightGB is pinned at sparkDash's 113 GB budget (121 cap - 8 reserve) to keep the brick composable as node-exclusive. Weights must be staged once before the first start (~107 GB, no GPU): ~/deploy/ds4-one/download.sh. Backend port 8000; clients reach it via the llama-swap gateway. Served name is '-solo' so it never collides with the dual TP=2 brick, which also serves on :8000.",
+      "maxContext": 340000,
+      "inputs": ["text"],
+      "outputs": ["text"],
+      "tools": true,
+      "quant": "EXL3 3.0bpw (REAP-K216)",
+      "description": "DeepSeek V4 Flash 0731 (EXL3 3.0bpw, REAP-K216) served by vLLM + SparkInfer with DSpark K5 speculative decode. Single node, 340k context, ~44-47 tok/s decode.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "startTimeoutMs": 3600000,
+          "start": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["status"] },
+          "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-0731-solo" }
+        }
+      }
+    },
+    {
       "id": "laguna-s",
       "displayName": "Laguna-S 2.1",
       "backend": "vllm",
@@ -241,7 +268,7 @@
       "weightGB": 100,
       "port": 8000,
       "servedModel": "deepseek-v4-flash-0731",
-      "notes": "0731 model (deepseek-ai/DeepSeek-V4-Flash-0731) NVFP4 + DSpark spec-decode, TP=2 over RoCE, ctx 1M. Whole-cluster (both nodes). vLLM via ~/deploy/dspark with .env.dspark.0731 (project deepseek-v4-flash-0731). Model must be cached on both nodes first: ENV_FILE=~/deploy/dspark/.env.dspark.0731 ~/deploy/dspark/prepare-dspark-model-cache.sh",
+      "notes": "0731 model (deepseek-ai/DeepSeek-V4-Flash-0731) NVFP4 + DSpark spec-decode, TP=2 over RoCE, ctx 1M. Whole-cluster (both nodes). vLLM via ~/deploy/dspark (upstream MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark, now a git checkout - upgrade with git pull) using .env.dspark.0731 (project deepseek-v4-flash-0731), pinned to DSPARK_REVISION=9e165c30. Cached on both nodes. To refresh: ENV_FILE=~/deploy/dspark/.env.dspark.0731 PREPARE_WORKER=0 ~/deploy/dspark/prepare-dspark-model-cache.sh --official --yes on spark1, then rsync the HF model dir to Spark2 over the fabric.",
       "maxContext": 1048576,
       "inputs": ["text"],
       "outputs": ["text"],
@@ -255,6 +282,33 @@
           "stop": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["stop"] },
           "status": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["status"] },
           "ready": { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-0731" }
+        }
+      }
+    },
+    {
+      "id": "glm-5.3-flash-exl3",
+      "displayName": "GLM-5.3 Flash EXL3 (dual TP=2)",
+      "backend": "vllm",
+      "placement": "dual",
+      "nodes": ["spark1", "spark2"],
+      "weightGB": 106,
+      "port": 8888,
+      "servedModel": "GLM-5.3-Flash-EXL3",
+      "notes": "MiaAI-Lab GLM-5.3-Flash EXL3/TR3 4bpw (~164 GiB, 120 shards) split TP=2 over the CX7 fabric: spark1 head (10.100.72.2) + spark2 worker (10.100.72.1), both on enp1s0f1np1/rocep1s0f1. DFlash2 speculative decode. Deployment tree at /home/eric/deploy/glm53 (own .env + overlay), so it is NOT vendored into deploy/. Backend port 8888.",
+      "maxContext": 1000000,
+      "inputs": ["text"],
+      "outputs": ["text"],
+      "quant": "EXL3/TR3 4bpw",
+      "description": "GLM-5.3 Flash, EXL3/TR3 4bpw across BOTH nodes (TP=2 over CX7) with DFlash2 speculative decode. 1M context.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "cwd": "/home/eric/deploy/glm53",
+          "startTimeoutMs": 1800000,
+          "start": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": [] },
+          "stop": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": ["status"] },
+          "ready": { "host": "127.0.0.1", "port": 8888, "servedModel": "GLM-5.3-Flash-EXL3" }
         }
       }
     },

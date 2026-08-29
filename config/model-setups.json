@@ -41,6 +41,25 @@
       ]
     },
     {
+      "id": "glm-5.3-flash-exl3",
+      "name": "GLM-5.3 Flash EXL3 (dual)",
+      "description": "GLM-5.3-Flash EXL3/TR3 4bpw · spark1 head + spark2 worker (TP=2 over CX7, DFlash2 spec-decode, 1M ctx)",
+      "sparks": ["spark1", "spark2"],
+      "startParallel": false,
+      "detect": { "localContainers": ["glm53-exl3-head"] },
+      "components": [
+        {
+          "id": "glm-5.3-flash-exl3",
+          "target": "local",
+          "start": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": [] },
+          "stop": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": ["status"] },
+          "startTimeoutMs": 1800000,
+          "ready": [{ "host": "127.0.0.1", "port": 8888, "servedModel": "GLM-5.3-Flash-EXL3" }]
+        }
+      ]
+    },
+    {
       "id": "deepseek-v4-0731-entrpi",
       "name": "DeepSeek V4 Flash 0731 (Entrpi 1-node)",
       "description": "DeepSeek-V4-Flash-0731 IQ2/Q2K single-node on spark1 (Entrpi/ds4 fork + DSpark, in-RAM)",
@@ -56,6 +75,25 @@
           "status": { "cmd": "/home/eric/sparkDash/deploy/ds4-entrpi.sh", "args": ["status"] },
           "startTimeoutMs": 600000,
           "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" }]
+        }
+      ]
+    },
+    {
+      "id": "deepseek-v4-0731-solo",
+      "name": "DeepSeek V4 Flash 0731 (SparkInfer 1-node)",
+      "description": "DeepSeek-V4-Flash-0731 EXL3 3.0bpw (REAP-K216) single-node on spark1 (vLLM + SparkInfer, DSpark K5, 340k ctx @ util 0.93) - takes the whole node",
+      "sparks": ["spark1"],
+      "startParallel": false,
+      "detect": { "endpoint": { "host": "127.0.0.1", "port": 8000, "matchModel": "deepseek-v4-flash-0731-solo" } },
+      "components": [
+        {
+          "id": "deepseek-v4-0731-solo",
+          "target": "local",
+          "start": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["start"] },
+          "stop": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["stop"] },
+          "status": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["status"] },
+          "startTimeoutMs": 3600000,
+          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-0731-solo" }]
         }
       ]
     },
