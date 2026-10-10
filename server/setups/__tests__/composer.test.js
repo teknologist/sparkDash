@@ -1,4 +1,7 @@
 import { test } from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import assert from "node:assert/strict";
 import { validateAssignment, ComposerManager } from "../ComposerManager.js";
 import { generateLlamaSwapConfig } from "../llamaSwapGen.js";
@@ -163,6 +166,7 @@ test("a serving dual brick is detected once and counted once per node", async ()
     _running: [], _applying: false, _disposed: false, _log: [], onChange: null,
     _loadPresets: () => [],
     _probeReady: async () => true,
+    _gatewayStarting: async () => [],
   });
   await mgr._detect();
   assert.equal(mgr._running.length, 1);
@@ -185,4 +189,149 @@ test("a dual brick's start guards memory on both nodes", () => {
   const cmd = yaml.split("\n").find((l, i, a) => a[i - 1]?.includes(`"${served}":`));
   const n = Math.round(dual.weightGB);
   assert.match(cmd, new RegExp(`\\{ /\\S+/memcheck\\.sh ${n} \\|\\| exit 1; \\$\\{ssh2\\} "/\\S+/memcheck\\.sh ${n}" \\|\\| exit 1;`));
+});
+
+// Auto-repair: a TP worker left running after its head is gone serves nothing
+// but keeps its whole memory share, so every later start fails (a GLM worker
+// held 103 GiB on spark2 for 3 days). The reaper must remove it — and must
+// never touch a pair that is merely starting or a node it could not inspect.
+function reaperMgr() {
+  const glm = {
+    id: "glm", placement: "dual", nodes: ["spark1", "spark2"], container: "glm-head",
+    peerContainers: { spark2: ["glm-worker"] },
+    launch: { spark1: { target: "local" } },
+  };
+  const removed = [];
+  const mgr = Object.create(ComposerManager.prototype);
+  Object.assign(mgr, {
+    _orphanSince: new Map(), _log: [], _disposed: false, onChange: null,
+    _removeContainer: async (node, name) => (removed.push(`${name}@${node}`), true),
+  });
+  const ps = (names, answered = true) => Object.assign(new Set(names), answered ? { answered } : {});
+  return { mgr, removed, bricks: [{ model: glm }], ps };
+}
+
+test("an orphaned dual worker is removed once it outlives the grace period", async () => {
+  const { mgr, removed, bricks, ps } = reaperMgr();
+  const cont = { spark1: ps([]), spark2: ps(["glm-worker"]) };
+  await mgr._reapOrphans(bricks, cont, 0);
+  await mgr._reapOrphans(bricks, cont, 60_000);
+  assert.deepEqual(removed, [], "a worker that just started (head coming up) must survive");
+  await mgr._reapOrphans(bricks, cont, 181_000);
+  assert.deepEqual(removed, ["glm-worker@spark2"]);
+});
+
+test("a worker whose head is up, or whose head node could not be inspected, is never reaped", async () => {
+  const { mgr, removed, bricks, ps } = reaperMgr();
+  for (const t of [0, 400_000]) {
+    await mgr._reapOrphans(bricks, { spark1: ps(["glm-head"]), spark2: ps(["glm-worker"]) }, t);
+  }
+  for (const t of [500_000, 900_000]) {
+    // docker ps failed on the head node: unknown is not "gone"
+    await mgr._reapOrphans(bricks, { spark1: ps([], false), spark2: ps(["glm-worker"]) }, t);
+  }
+  assert.deepEqual(removed, []);
+});
+
+test("the orphan clock resets when the head comes back", async () => {
+  const { mgr, removed, bricks, ps } = reaperMgr();
+  await mgr._reapOrphans(bricks, { spark1: ps([]), spark2: ps(["glm-worker"]) }, 0);
+  await mgr._reapOrphans(bricks, { spark1: ps(["glm-head"]), spark2: ps(["glm-worker"]) }, 100_000);
+  await mgr._reapOrphans(bricks, { spark1: ps([]), spark2: ps(["glm-worker"]) }, 200_000);
+  assert.deepEqual(removed, [], "the 3-minute window restarts after the head reappeared");
+});
+
+// An apply blocks in the gateway load for the whole cold start; detection used
+// to be skipped while applying, so the board showed nothing exactly while the
+// user was watching a model load. It must keep reporting the loading brick.
+test("detection keeps reporting a loading brick while an apply is in flight", async () => {
+  const glm = {
+    id: "glm", placement: "dual", nodes: ["spark1", "spark2"], container: "glm-head", servedModel: "glm",
+    launch: { spark1: { target: "local", ready: { host: "127.0.0.1", port: 8888, servedModel: "glm" } } },
+  };
+  const mgr = Object.create(ComposerManager.prototype);
+  Object.assign(mgr, {
+    catalog: { models: [glm], getModel: (id) => (id === "glm" ? glm : null) },
+    _running: [], _applying: true, _disposed: false, _log: [], onChange: null,
+    _loadTimes: { glm: [240] }, _loadStart: new Map(),
+    _probeReady: async () => false,
+    _gatewayStarting: async () => [],
+    _nodeContainers: async () => Object.assign(new Set(["glm-head"]), { answered: true }),
+    _containerLoadInfo: async () => ({ startedAtMs: Date.now() - 60_000, lines: ["Loading safetensors: 40% Completed"] }),
+  });
+  await mgr._detect();
+  assert.equal(mgr._running.length, 1);
+  const r = mgr._running[0];
+  assert.equal(r.state, "loading");
+  assert.equal(r.progress.phase, "loading weights");
+  assert.ok(r.progress.etaSec > 150 && r.progress.etaSec <= 180, `eta ${r.progress.etaSec}`);
+});
+
+// Every model — not only container ones — must learn its load time on its first
+// load and persist it, so the NEXT load has an ETA even after a restart/reboot.
+function timingMgr({ model, ready, starting = [], containers = [] }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "composer-load-"));
+  const mgr = Object.create(ComposerManager.prototype);
+  Object.assign(mgr, {
+    catalog: { models: [model], getModel: (id) => (id === model.id ? model : null) },
+    _running: [], _applying: false, _disposed: false, _log: [], onChange: null,
+    _loadTimes: {}, _loadStart: new Map(),
+    _sidecarPath: (name) => path.join(dir, name),
+    _probeReady: async () => ready.value,
+    _gatewayStarting: async () => starting,
+    _nodeContainers: async () => Object.assign(new Set(containers), { answered: true }),
+  });
+  return { mgr, file: path.join(dir, "load-times.json") };
+}
+
+test("a gateway-started model without a container is shown loading and its first load is persisted", async (t) => {
+  const ds4 = {
+    id: "ds4", placement: "single", nodes: ["spark1", "spark2"], servedModel: "ds4",
+    launch: {
+      spark1: { target: "local", ready: { host: "127.0.0.1", port: 8000, servedModel: "ds4" } },
+      spark2: { target: "ssh", host: "Spark2", ready: { host: "10.100.72.1", port: 8000, servedModel: "ds4" } },
+    },
+  };
+  const ready = { value: false };
+  const starting = [{ model: "ds4", proxy: "http://10.100.72.1:8000" }];
+  const { mgr, file } = timingMgr({ model: ds4, ready, starting });
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  await mgr._detect();
+  assert.equal(mgr._running[0].state, "loading");
+  assert.equal(mgr._running[0].node, "spark2", "placed on the node the gateway proxies to");
+  assert.equal(mgr._running[0].progress.etaSec, null, "no ETA before the first measured load");
+
+  starting.length = 0;
+  ready.value = true;
+  t.mock.timers.tick(95_000);
+  await mgr._detect();
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf-8")), { ds4: [95] });
+
+  // A fresh manager (dashboard restart) reads it back and gives the next load an ETA.
+  const again = timingMgr({ model: ds4, ready: { value: false }, starting: [{ model: "ds4", proxy: "http://127.0.0.1:8000" }] });
+  again.mgr._sidecarPath = () => file;
+  again.mgr._loadTimes = again.mgr._readJsonSidecar("load-times.json");
+  await again.mgr._detect();
+  t.mock.timers.tick(30_000);
+  await again.mgr._detect();
+  assert.equal(again.mgr._running[0].progress.etaSec, 65);
+});
+
+test("a serving model whose probe blips is not recorded as a days-long load", async (t) => {
+  const glm = {
+    id: "glm", placement: "dual", nodes: ["spark1", "spark2"], container: "glm-head", servedModel: "glm",
+    launch: { spark1: { target: "local", ready: { host: "127.0.0.1", port: 8888, servedModel: "glm" } } },
+  };
+  const ready = { value: true };
+  const { mgr, file } = timingMgr({ model: glm, ready, containers: ["glm-head"] });
+  t.mock.timers.enable({ apis: ["Date"], now: 10 * 86_400_000 });
+  mgr._containerLoadInfo = async () => ({ startedAtMs: 7 * 86_400_000, lines: [] }); // started 3 days ago
+  await mgr._detect(); // serving
+  ready.value = false;
+  t.mock.timers.tick(5_000);
+  await mgr._detect(); // one missed probe: looks "loading"
+  ready.value = true;
+  t.mock.timers.tick(5_000);
+  await mgr._detect(); // back
+  assert.equal(fs.existsSync(file), false);
 });

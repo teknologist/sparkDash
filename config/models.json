@@ -655,6 +655,11 @@
       "port": 8888,
       "servedModel": "GLM-5.3-Flash-EXL3",
       "container": "glm53-exl3-head",
+      "peerContainers": {
+        "spark2": [
+          "glm53-exl3-worker"
+        ]
+      },
       "notes": "MiaAI-Lab GLM-5.3-Flash EXL3/TR3 4bpw (~164 GiB, 120 shards) split TP=2 over the CX7 fabric: spark1 head (10.100.72.2) + spark2 worker (10.100.72.1), both on enp1s0f1np1/rocep1s0f1. DFlash2 speculative decode. Upstream 1.6+ profile (synced 2026-09-24): :exl3-instanttensor image with the InstantTensor loader (~70 s cold load vs ~300 s), 850k ctx at util 0.85 with an explicit 14 GiB KV pool (--kv-cache-memory-bytes; without it 0.85 does not boot on the loader), fair v5 mixed-prefill, MNBT 7168. weightGB 104 = 0.85 x 121.69 GiB. Deployment tree at /home/eric/deploy/glm53 (own .env + overlay), so it is NOT vendored into deploy/. Backend port 8888.",
       "maxContext": 850000,
       "inputs": [

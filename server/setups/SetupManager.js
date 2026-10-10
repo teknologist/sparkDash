@@ -262,13 +262,17 @@ export class SetupManager {
 
   /** Keep the machine's active/phase in sync with reality while idle. */
   async _reconcile() {
-    // A switch owns phase during transitions; a `failed` result is sticky until
-    // the user starts another action, so the failure + reason stay visible.
-    if (this._transitioning || this._machine.phase === "failed") return;
+    // A switch owns phase during transitions.
+    if (this._transitioning) return;
     const { activeSetupId, error } = await this.detectActiveId();
     // A switch may have begun during the (up to 4s) docker probe above — bail
     // before overwriting the transition's phase/active state with stale data.
     if (this._transitioning) return;
+    // A `failed` result stays visible (with its reason) while nothing serves,
+    // but not once a setup is detected running: the model may have come up
+    // another way (composer, gateway, a retry), and the pill kept saying
+    // "No model running" in red over a serving GLM.
+    if (this._machine.phase === "failed" && !activeSetupId) return;
     const phase = error ? "unknown" : activeSetupId ? "running" : "idle";
     const changed =
       this._machine.activeSetupId !== activeSetupId ||

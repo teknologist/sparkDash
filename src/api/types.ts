@@ -550,6 +550,21 @@ export interface RunningModel {
   state?: "ready" | "loading";
   /** whole-cluster (dual/TP=2) model — shown on every node it spans */
   dual?: boolean;
+  /** While loading: phase from the container log, ETA from past loads. */
+  progress?: LoadProgress;
+}
+
+export interface LoadProgress {
+  /** e.g. "patching", "loading weights", "capturing CUDA graphs"; null when unrecognised */
+  phase: string | null;
+  /** vLLM's own shard % during "loading weights", when it prints one */
+  phasePct: number | null;
+  elapsedSec: number;
+  /** median of recent measured loads; null until one has been measured */
+  expectedSec: number | null;
+  etaSec: number | null;
+  /** elapsed / expected, capped at 99 until the API answers */
+  pct: number | null;
 }
 
 // ─── Spark snapshot (server pushes this) ──────────────────
@@ -1240,6 +1255,8 @@ export interface ComposerRunning {
   port: number;
   servedModel: string;
   up: boolean;
+  state?: "ready" | "loading";
+  progress?: LoadProgress;
 }
 
 export interface ComposerPerNode {

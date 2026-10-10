@@ -16,6 +16,7 @@ import { formatCtx } from "./fleetStats";
 import { ModelLauncher } from "./ModelLauncher";
 import { TrendLine } from "../ui/TrendLine";
 import { useMetricsHistoryTail } from "../../hooks/metricsStore";
+import { LoadProgressBar, loadProgressText, loadProgressTitle } from "../LoadProgress";
 
 type Unit = "celsius" | "fahrenheit";
 
@@ -368,6 +369,7 @@ function SparkCardImpl({
           {role !== "worker" && running.length > 0 ? (
             // Composer-detected models on this node (several can co-reside), each
             // with its own live tok/s joined on the served name the probe reports.
+            <div>
             <div className="ov-modelrow flex-wrap gap-1.5">
               {running.map((m) => {
                 const met = activeLlms.find((l) => l.modelId === m.model);
@@ -378,7 +380,7 @@ function SparkCardImpl({
                       m.dual ? "border-warning/50 bg-warning/10" : "border-border bg-surface-elevated"
                     }`}
                     title={`port ${m.port} · ${
-                      m.up ? "serving" : m.state === "loading" ? "loading (model initializing)" : "starting / not ready"
+                      m.up ? "serving" : m.state === "loading" ? loadProgressTitle(m.progress) : "starting / not ready"
                     }${m.dual ? " · whole-cluster (dual TP=2)" : ""}`}
                   >
                     <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.up ? "bg-success" : "bg-warning animate-pulse"}`} />
@@ -401,6 +403,19 @@ function SparkCardImpl({
                   </span>
                 );
               })}
+            </div>
+            {running
+              .filter((m) => !m.up && m.state === "loading")
+              .map((m) => (
+                // Load progress: phase from the container log, ETA from this model's past loads.
+                <div key={`load-${m.model}`} className="mt-2 space-y-1">
+                  <div className="flex items-baseline justify-between gap-2 text-[10px]">
+                    <span className="truncate text-warning">{loadProgressText(m.progress)}</span>
+                    <span className="shrink-0 truncate text-muted">{m.model}</span>
+                  </div>
+                  <LoadProgressBar progress={m.progress} />
+                </div>
+              ))}
             </div>
           ) : modelText ? (
             <div className="ov-modelrow" title={modelTitle}>
