@@ -19,6 +19,7 @@ config/llm-token-totals.json.*
 config/fleet-energy.json
 config/.fleet-energy.json.*.tmp
 config/load-times.json
+config/model-stats.json
 config/gpu-memory.json
 config/gpu-memory.json.*
 config/bench-exports/

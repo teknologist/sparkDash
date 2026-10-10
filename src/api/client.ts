@@ -12,6 +12,7 @@ import type {
   HermesBatchUpdateResponse,
   HermesUpdatesResponse,
   LauncherAction,
+  LauncherRunResult,
   LauncherJob,
   LauncherJobRead,
   LauncherListResponse,
@@ -679,8 +680,21 @@ export function removeLauncher(sparkId: string, launcherId: string): Promise<{ s
 }
 
 /** Start the model's start.sh, run its stop.sh, or re-open its running output. Returns the job to follow. */
-export function runLauncher(sparkId: string, launcherId: string, action: LauncherAction): Promise<{ job: LauncherJob }> {
-  return apiFetch(`${launchersBase(sparkId)}/${encodeURIComponent(launcherId)}/${action}`, { method: "POST" });
+/**
+ * Start/stop/attach a launcher model. A start the composer must make room for
+ * answers `{ needsRoom, plan }` without starting anything; resend with
+ * `{ makeRoom: true }` once the user has confirmed the plan.
+ */
+export function runLauncher(
+  sparkId: string,
+  launcherId: string,
+  action: LauncherAction,
+  opts?: { makeRoom?: boolean }
+): Promise<LauncherRunResult> {
+  return apiFetch(`${launchersBase(sparkId)}/${encodeURIComponent(launcherId)}/${action}`, {
+    method: "POST",
+    ...(opts?.makeRoom ? { body: JSON.stringify({ makeRoom: true }) } : {}),
+  });
 }
 
 /** Lines of a job after `since` (a sequence number), plus the unfinished last line. */

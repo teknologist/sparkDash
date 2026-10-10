@@ -17,7 +17,45 @@ export class ModelCatalog {
     /** @type {Record<string, number>} */
     this._nodeCapacityGB = {};
     this._mtime = 0;
+    /** @type {null | (() => any[])} extra bricks (launcher models), read live */
+    this._extra = null;
     this._load();
+  }
+
+  /**
+   * Add bricks that do not live in models.json (user-registered launcher
+   * models). A brick with no measured footprint (weightGB null) claims its
+   * node's whole budget, so placing it never under-counts memory.
+   */
+  setExtraModels(fn) {
+    this._extra = typeof fn === "function" ? fn : null;
+  }
+
+  /**
+   * Measured stats (ModelStats) override configured estimates for placement:
+   * a fixed-footprint model's `weightGB` becomes its exact measured peak (an
+   * approximate one only ever raises it). Elastic vLLM models keep their
+   * configured share — their footprint is set by gpu-util, not by history —
+   * and just expose the peak for reference.
+   */
+  setStats(stats) {
+    this._stats = stats || null;
+  }
+
+  _withMeasured(m) {
+    const peak = this._stats?.peak(m.id) || { exact: null, approx: null };
+    const budget = () => Math.min(...(m.nodes || Object.keys(m.launch || {})).map((n) => this.nodeBudgetGB(n)));
+    const measuredPeakGB = peak.exact ?? peak.approx;
+    if (m.launcher) {
+      // Never measured: claim the whole node, so a first start clears it.
+      const gb = peak.exact ?? (peak.approx != null ? Math.max(peak.approx, budget()) : null);
+      return { ...m, weightGB: gb ?? budget(), footprintKnown: gb != null, measuredPeakGB };
+    }
+    if (measuredPeakGB == null) return m;
+    if (Number(m.maxUtil) > 0) return { ...m, measuredPeakGB };
+    const estimate = Number(m.weightGB != null ? m.weightGB : m.ramGB) || 0;
+    const gb = peak.exact ?? Math.max(estimate, peak.approx);
+    return { ...m, weightGB: gb, estimateGB: estimate, measuredPeakGB };
   }
 
   _load() {
@@ -52,7 +90,14 @@ export class ModelCatalog {
 
   get models() {
     this._refreshIfChanged();
-    return this._models;
+    let extra = [];
+    try {
+      extra = this._extra ? this._extra() || [] : [];
+    } catch {
+      /* a broken provider must not take the file catalog down with it */
+    }
+    const all = [...this._models, ...extra];
+    return this._stats ? all.map((m) => this._withMeasured(m)) : all;
   }
 
   getModel(id) {
@@ -91,6 +136,9 @@ export class ModelCatalog {
         port: Number(m.port) || null,
         servedModel: m.servedModel || m.id,
         notes: m.notes || "",
+        ...(m.launcher ? { launcher: true, footprintKnown: Boolean(m.footprintKnown) } : {}),
+        ...(m.measuredPeakGB != null ? { measuredPeakGB: m.measuredPeakGB } : {}),
+        ...(m.estimateGB != null ? { estimateGB: m.estimateGB } : {}),
       })),
       nodeCapacityGB: this.models.length
         ? Object.fromEntries(

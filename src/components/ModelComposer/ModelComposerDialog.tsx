@@ -123,6 +123,22 @@ const backendBadge: Record<string, string> = {
   sglang: "bg-warning/20 text-warning",
 };
 
+/** Tooltip for a brick's size: where the number comes from. */
+function sizeTitle(brick: ComposerBrick, util: number | null): string {
+  const parts: string[] = [];
+  if (util != null) parts.push(`gpu-memory-utilization ${util.toFixed(2)}`);
+  if (brick.launcher && brick.footprintKnown === false) {
+    parts.push("memory not measured yet — the first start clears the node");
+  } else if (brick.measuredPeakGB != null) {
+    parts.push(
+      brick.estimateGB != null
+        ? `measured peak ${brick.measuredPeakGB} GB (estimate was ${brick.estimateGB} GB)`
+        : `measured peak ${brick.measuredPeakGB} GB`
+    );
+  }
+  return parts.join(" · ");
+}
+
 function BrickTile({
   brick,
   onDragStart,
@@ -173,9 +189,10 @@ function BrickTile({
       )}
       <span
         className="ml-auto shrink-0 font-tabular text-[11px] text-muted"
-        title={elastic ? `gpu-memory-utilization ${util!.toFixed(2)}` : undefined}
+        title={sizeTitle(brick, elastic ? util! : null)}
       >
         {shownGB} GB{elastic ? ` · ${util!.toFixed(2)}` : ""}
+        {brick.launcher && brick.footprintKnown === false ? " · first run" : brick.measuredPeakGB != null ? " · measured" : ""}
       </span>
       {onRemove && (
         <button

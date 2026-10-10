@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { execFile, spawn } from "child_process";
 import { MODEL_SETUPS_PATH, SETUP_LOGS_DIR } from "../config.js";
+import { childEnv } from "./childEnv.js";
 
 /**
  * SetupManager — owns the declarative model-setup registry, reports which
@@ -524,7 +525,7 @@ export class SetupManager {
     // and drive docker; and the ssh client below needs the agent to auth.
     // Per-component `env` (config) is layered on top — e.g. ENABLE_SPEC=1.
     const extraEnv = component.env && typeof component.env === "object" ? component.env : {};
-    const opts = { env: { ...process.env, ...extraEnv } };
+    const opts = { env: childEnv(extraEnv) };
     if (component.target === "ssh") {
       if (!component.host || !component.cmd) {
         return Promise.reject(new Error(`ssh component ${component.id} missing host/cmd`));

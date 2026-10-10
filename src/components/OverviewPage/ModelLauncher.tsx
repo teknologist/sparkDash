@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { LauncherRunState, LlmLauncher, SparkSnapshot } from "../../api/types";
+import type { LauncherRunState, LlmLauncher, RoomPlan, SparkSnapshot } from "../../api/types";
 import { runLauncher } from "../../api/client";
 import { fetchLaunchersCached, getCachedLaunchers, invalidateLaunchers, patchCachedStatus } from "../../hooks/launcherCache";
 import { LlmLauncherDialog } from "../SparkPage/LlmLauncherDialog";
 import { PlusIcon } from "../ui/icons";
+import { roomPlanQuestion, roomVictimsText } from "../RoomPlan";
 
 const REFRESH_MS = 30_000;
 /** Status re-check after a Start, once the script has had time to bring the engine up. */
@@ -35,6 +36,9 @@ export function ModelLauncher({
   const [failed, setFailed] = useState(false);
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The composer must stop other models first: asked before anything stops. */
+  const [roomAsk, setRoomAsk] = useState<{ launcher: LlmLauncher; plan: RoomPlan } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [override, setOverride] = useState(false);
   /** Ignores results that arrive after unmount or a Spark switch. */
@@ -75,12 +79,23 @@ export function ModelLauncher({
     };
   }, [refresh]);
 
-  async function start(l: LlmLauncher) {
+  async function start(l: LlmLauncher, makeRoom = false) {
     setError(null);
+    setNotice(null);
+    setRoomAsk(null);
     setStarting(l.id);
     try {
-      await runLauncher(sparkId, l.id, "start");
+      const res = makeRoom
+        ? await runLauncher(sparkId, l.id, "start", { makeRoom: true })
+        : await runLauncher(sparkId, l.id, "start");
       if (!aliveRef.current) return;
+      if (res?.needsRoom && res.plan) {
+        setRoomAsk({ launcher: l, plan: res.plan });
+        return;
+      }
+      if (res?.makingRoom && res.plan) {
+        setNotice(`Stopping ${roomVictimsText(res.plan)}; ${l.name} starts once the memory is free.`);
+      }
       // Not followed from here (the Spark page shows the output); just keep the status honest.
       patchCachedStatus(sparkId, l.id, "running");
       setStatuses((s) => ({ ...s, [l.id]: "running" }));
@@ -188,7 +203,22 @@ export function ModelLauncher({
   return (
     <>
       <div className="ov-launch">
-        {body}
+        {roomAsk ? (
+          <>
+            <div className="ov-launch__hint">{roomPlanQuestion(roomAsk.plan)}</div>
+            <div className="ov-launch__more">
+              <button type="button" className="btn btn--sm btn--primary" onClick={() => void start(roomAsk.launcher, true)}>
+                Stop &amp; start
+              </button>
+              <button type="button" className="btn btn--sm btn--ghost" onClick={() => setRoomAsk(null)}>
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : (
+          body
+        )}
+        {notice ? <div className="ov-launch__hint" role="status">{notice}</div> : null}
         {error ? <div className="ov-launch__err" role="alert">{error}</div> : null}
       </div>
       <LlmLauncherDialog

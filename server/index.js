@@ -11,6 +11,7 @@ import { resolveFrontendDir, FRONTEND_MISSING_MESSAGE } from "./frontendDir.js";
 import { SparkMonitor } from "./sparks/SparkMonitor.js";
 import { SetupManager } from "./setups/SetupManager.js";
 import { ComposerManager } from "./setups/ComposerManager.js";
+import { LauncherBridge, composerPortConflict, launcherBrickId } from "./setups/launcherBridge.js";
 import { collectionWasSuccessful } from "./collectors/SystemCollector.js";
 import { sshExec } from "./collectors/ssh.js";
 import { comfyCancelJob } from "./collectors/comfyActions.js";
@@ -407,6 +408,29 @@ const setupManager = new SetupManager();
 
 // ─── Model composer (RAM-aware arbitrary per-node combinations) ─
 const composerManager = new ComposerManager();
+
+// Live node memory: the composer measures each model's peak from it, and room
+// planning uses real availability rather than its own estimate.
+composerManager.nodeMemory = (id) => {
+  const um = monitors.get(id)?.snapshot()?.metrics?.unifiedMemory;
+  if (!um || !(um.total > 0)) return null;
+  return { usedGB: um.used / 1024, availableGB: um.available / 1024 };
+};
+
+// Launcher models (above) join the composer as bricks: counted against node
+// memory, stoppable to make room, and routed through the gateway.
+composerManager.attachLauncherBridge(
+  new LauncherBridge({
+    store: launcherStore,
+    manager: launcherManager,
+    getSpark: (id) => registry.getSpark(id),
+    sparkIds: () => registry.sparkIds,
+    statuses: (spark, launchers) => cachedLauncherStatuses(spark, launchers),
+    stats: composerManager.stats,
+    // The gateway runs on this host and calls back over loopback.
+    dashUrl: `http://127.0.0.1:${PORT}`,
+  })
+);
 
 // ─── Start monitor for a Spark ───────────────────────────
 function startMonitor(spark) {
@@ -906,10 +930,21 @@ app.get("/api/sparks/:id/llm-launchers", async (req, res) => {
   res.json(body);
 });
 
+/** A launcher may not take a port a composer model already serves on that Spark. */
+function launcherPortError(spark, rawPort) {
+  const port = Number(rawPort);
+  const hit = composerPortConflict(composerManager.catalog.models, spark.id, port);
+  return hit
+    ? `Port ${port} on ${spark.name} is already used by the composer model "${hit.name}". Start it from Compose, or pick another port.`
+    : null;
+}
+
 app.post("/api/sparks/:id/llm-launchers", (req, res) => {
   const spark = launcherContext(req, res);
   if (!spark) return;
   launcherStatusCache.delete(spark.id);
+  const portError = launcherPortError(spark, req.body?.port);
+  if (portError) return res.status(400).json({ error: portError });
   const result = launcherStore.add(spark.id, req.body);
   if (!result.ok) return res.status(400).json({ error: result.error });
   res.status(201).json({ launcher: result.launcher });
@@ -919,6 +954,10 @@ app.put("/api/sparks/:id/llm-launchers/:lid", async (req, res) => {
   const spark = launcherContext(req, res);
   if (!spark) return;
   launcherStatusCache.delete(spark.id);
+  if (req.body && "port" in req.body) {
+    const portError = launcherPortError(spark, req.body.port);
+    if (portError) return res.status(400).json({ error: portError });
+  }
   const result = await launcherManager.updateLauncher(spark, req.params.lid, req.body);
   if (!result.ok) return res.status(result.notFound ? 404 : result.conflict ? 409 : 400).json({ error: result.error });
   res.json({ launcher: result.launcher });
@@ -961,6 +1000,26 @@ for (const action of ["start", "stop", "attach"]) {
     const limiter = action === "attach" ? allowLaunchProbe : allowLaunch;
     if (!limiter(principalKey(req))) {
       return rejectLimited(res, "Too many start/stop requests; try again shortly");
+    }
+    // Starting a model the composer knows: make room first. The UI gets the plan
+    // and asks before anything is stopped; the gateway (?gateway=1) never
+    // evicts — it is refused with "no room" so nothing stops behind your back.
+    if (action === "start" && launcher.port != null) {
+      const plan = composerManager.planRoom(spark.id, launcherBrickId(spark.id, launcher.id));
+      if (plan && plan.victims.length) {
+        if (req.query.gateway === "1") {
+          return res.status(409).json({ error: `No room on ${spark.name} for ${launcher.name}`, plan });
+        }
+        if (req.body?.makeRoom !== true) return res.json({ needsRoom: true, plan });
+        if (composerManager.isBusy()) {
+          return res.status(409).json({ error: "The composer is busy (an apply is in progress)" });
+        }
+        composerManager.makeRoomAndStart(plan).catch((err) => {
+          console.error("[composer] make room failed:", err.message);
+        });
+        return res.status(202).json({ job: null, makingRoom: true, plan });
+      }
+      if (plan) composerManager.beginPeak(plan.targetId, spark.id);
     }
     const result = launcherManager.startJob(spark, launcher, action);
     if (!result.ok) {

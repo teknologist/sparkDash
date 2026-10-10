@@ -106,10 +106,22 @@ export function generateLlamaSwapConfig(catalog, assignment) {
         : Number(b.model.maxUtil) > 0
           ? Number(b.model.maxUtil)
           : null;
-    const startCmd =
-      b.spec.target === "ssh" ? remote(b.spec, b.spec.start, util) : local(b.spec, b.spec.start, util);
-    const stopCmd =
-      b.spec.target === "ssh" ? remote(b.spec, b.spec.stop) : local(b.spec, b.spec.stop);
+    // Launcher models start through the dashboard, which owns the room check:
+    // a start that would have to stop other models is refused with 409 ("no
+    // room") rather than evicting behind the user's back, so this exits 1.
+    // The start returns as soon as the job is spawned, so wait for the API
+    // (bounded by healthCheckTimeout) before handing over to the keeper.
+    const isLauncher = b.spec.target === "launcher";
+    const startCmd = isLauncher
+      ? `curl -fsS -X POST "${b.spec.gatewayStart}" >/dev/null || exit 1; for i in $(seq 1 180); do curl -fsS --max-time 4 ${base}/v1/models >/dev/null 2>&1 && break; sleep 5; done`
+      : b.spec.target === "ssh"
+        ? remote(b.spec, b.spec.start, util)
+        : local(b.spec, b.spec.start, util);
+    const stopCmd = isLauncher
+      ? `curl -fsS -X POST "${b.spec.gatewayStop}" >/dev/null`
+      : b.spec.target === "ssh"
+        ? remote(b.spec, b.spec.stop)
+        : local(b.spec, b.spec.stop);
 
     // Free-memory guard. llama-swap models exclusivity, not capacity: within a
     // co-resident group it will start a model the node cannot hold, vLLM then
@@ -125,7 +137,7 @@ export function generateLlamaSwapConfig(catalog, assignment) {
     const localGuard = `${MEMCHECK} ${needGB} || exit 1; `;
     const remoteGuard = `\${ssh2} "${MEMCHECK} ${needGB}" || exit 1; `;
     const memGuard =
-      needGB <= 0
+      needGB <= 0 || isLauncher
         ? ""
         : b.model.placement === "dual"
           ? localGuard + remoteGuard

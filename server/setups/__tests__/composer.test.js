@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { validateAssignment, ComposerManager } from "../ComposerManager.js";
 import { generateLlamaSwapConfig } from "../llamaSwapGen.js";
 import { ModelCatalog } from "../ModelCatalog.js";
+import { ModelStats } from "../ModelStats.js";
 
 // Minimal in-test catalog so validation tests don't depend on models.json values.
 function makeCatalog({ budget = 100, cap = 128 } = {}) {
@@ -253,7 +254,8 @@ test("detection keeps reporting a loading brick while an apply is in flight", as
   Object.assign(mgr, {
     catalog: { models: [glm], getModel: (id) => (id === "glm" ? glm : null) },
     _running: [], _applying: true, _disposed: false, _log: [], onChange: null,
-    _loadTimes: { glm: [240] }, _loadStart: new Map(),
+    stats: Object.assign(Object.create(ModelStats.prototype), { file: "/dev/null", models: { glm: { loads: [240] } }, _save() {} }),
+    _loadStart: new Map(),
     _probeReady: async () => false,
     _gatewayStarting: async () => [],
     _nodeContainers: async () => Object.assign(new Set(["glm-head"]), { answered: true }),
@@ -275,13 +277,13 @@ function timingMgr({ model, ready, starting = [], containers = [] }) {
   Object.assign(mgr, {
     catalog: { models: [model], getModel: (id) => (id === model.id ? model : null) },
     _running: [], _applying: false, _disposed: false, _log: [], onChange: null,
-    _loadTimes: {}, _loadStart: new Map(),
-    _sidecarPath: (name) => path.join(dir, name),
+    stats: new ModelStats(path.join(dir, "model-stats.json")),
+    _loadStart: new Map(),
     _probeReady: async () => ready.value,
     _gatewayStarting: async () => starting,
     _nodeContainers: async () => Object.assign(new Set(containers), { answered: true }),
   });
-  return { mgr, file: path.join(dir, "load-times.json") };
+  return { mgr, file: path.join(dir, "model-stats.json") };
 }
 
 test("a gateway-started model without a container is shown loading and its first load is persisted", async (t) => {
@@ -305,12 +307,11 @@ test("a gateway-started model without a container is shown loading and its first
   ready.value = true;
   t.mock.timers.tick(95_000);
   await mgr._detect();
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf-8")), { ds4: [95] });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf-8")).models.ds4.loads, [95]);
 
   // A fresh manager (dashboard restart) reads it back and gives the next load an ETA.
   const again = timingMgr({ model: ds4, ready: { value: false }, starting: [{ model: "ds4", proxy: "http://127.0.0.1:8000" }] });
-  again.mgr._sidecarPath = () => file;
-  again.mgr._loadTimes = again.mgr._readJsonSidecar("load-times.json");
+  again.mgr.stats = new ModelStats(file);
   await again.mgr._detect();
   t.mock.timers.tick(30_000);
   await again.mgr._detect();
@@ -333,5 +334,5 @@ test("a serving model whose probe blips is not recorded as a days-long load", as
   ready.value = true;
   t.mock.timers.tick(5_000);
   await mgr._detect(); // back
-  assert.equal(fs.existsSync(file), false);
+  assert.deepEqual(mgr.stats.loads("glm"), []);
 });

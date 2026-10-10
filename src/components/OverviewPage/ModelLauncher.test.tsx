@@ -152,4 +152,30 @@ describe("ModelLauncher", () => {
     await flush();
     expect(fetchLaunchers).not.toHaveBeenCalled();
   });
+  // Upstream started models with no memory check. Now a start that would need
+  // other models stopped asks first and stops nothing until confirmed.
+  it("asks before stopping anything to make room, and only then makes room", async () => {
+    fetchLaunchers.mockResolvedValue(list({ a: "stopped", b: "stopped" }));
+    const plan = {
+      node: "s1", targetId: "launcher:s1:a", targetName: "Alpha", firstRun: false, needGB: 60, freeGB: 12, fits: true,
+      victims: [{ id: "glm", name: "GLM-5.3", footprintGB: 100, nodes: ["spark1", "spark2"] }],
+    };
+    runLauncher.mockResolvedValueOnce({ job: null, needsRoom: true, plan });
+    const { container } = render(<ModelLauncher spark={makeSpark("s1")} />);
+    await flush();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("button.btn--primary")!.click();
+    });
+    expect(runLauncher).toHaveBeenCalledWith("s1", "a", "start");
+    expect(container.textContent).toContain("Starting Alpha will stop GLM-5.3 (spark1 + spark2)");
+    expect(container.textContent).not.toContain("Loading Alpha");
+
+    runLauncher.mockResolvedValueOnce({ job: null, makingRoom: true, plan });
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Stop & start")!;
+    await act(async () => {
+      confirm.click();
+    });
+    expect(runLauncher).toHaveBeenLastCalledWith("s1", "a", "start", { makeRoom: true });
+    expect(container.textContent).toContain("Stopping GLM-5.3 (spark1 + spark2); Alpha starts once the memory is free.");
+  });
 });

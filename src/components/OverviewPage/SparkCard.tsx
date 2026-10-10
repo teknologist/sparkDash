@@ -180,7 +180,9 @@ function SparkCardImpl({
     !llm && (memUsed >= 2048 || usage >= 10)
       ? `${formatMb(memUsed)} VRAM in use · GPU ${Math.round(usage)}%`
       : null;
-  const showLauncher = role !== "worker" && !llm && spark.llmMonitoring !== false;
+  // Not where composer models run: a dual model's worker half serves nothing on
+  // this node, so `llm` is empty, yet the node is full — the chips show it instead.
+  const showLauncher = role !== "worker" && !llm && spark.llmMonitoring !== false && !(spark.runningModels?.length);
 
   const showTps = role !== "worker" && !!llm;
   const llmChip = llm

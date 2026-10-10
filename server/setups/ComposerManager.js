@@ -3,8 +3,10 @@ import { spawn, execFile } from "child_process";
 import { ModelCatalog } from "./ModelCatalog.js";
 import { generateLlamaSwapConfig } from "./llamaSwapGen.js";
 import { allocateNode } from "./nodeAlloc.js";
-import { parseLoadPhase, loadProgress, LOAD_HISTORY_MAX } from "./loadProgress.js";
+import { parseLoadPhase, loadProgress } from "./loadProgress.js";
+import { ModelStats } from "./ModelStats.js";
 import { COMPOSITIONS_PATH, LLAMA_SWAP_CONFIG_PATH, LLAMA_SWAP_URL } from "../config.js";
+import { childEnv } from "./childEnv.js";
 
 const DETECT_INTERVAL_MS = 5000;
 const READY_TIMEOUT_MS = 180000;
@@ -18,6 +20,8 @@ const LOG_MAX = 400;
  * GLM start failed its memory check).
  */
 const ORPHAN_GRACE_MS = 3 * 60 * 1000;
+/** Free-memory wait (also drops the page cache CUDA counts as used). Same path on both nodes. */
+const MEMCHECK = "/home/eric/sparkDash/deploy/memcheck.sh";
 const CONTAINER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 /** A "load" longer than this is a detection glitch, never recorded as a load time. */
 const MAX_RECORDED_LOAD_SEC = 3 * 60 * 60;
@@ -154,8 +158,15 @@ export class ComposerManager {
     this._launchedUtil = this._loadLaunchedUtil();
     /** First time each `container@node` was seen orphaned (see _reapOrphans). */
     this._orphanSince = new Map();
-    /** Measured load durations (s) per brick id, newest last — drives the ETA. */
-    this._loadTimes = this._readJsonSidecar("load-times.json");
+    /** Measured load times + peak memory per brick (drives ETA and placement). */
+    this.stats = new ModelStats(this._sidecarPath("model-stats.json"), {
+      legacyLoadTimesFile: this._sidecarPath("load-times.json"),
+    });
+    this.catalog.setStats(this.stats);
+    /** Open peak-memory measurements: id → { nodes, baseline, frozen, approx, startedAt } */
+    this._peakRuns = new Map();
+    /** (node) => { usedGB, availableGB } | null — set by the server (live metrics). */
+    this.nodeMemory = null;
     /** Container start (ms) of each brick seen loading, until it serves. */
     this._loadStart = new Map();
     /** @type {null | (() => void)} */
@@ -166,6 +177,144 @@ export class ComposerManager {
     }, DETECT_INTERVAL_MS);
     if (typeof this._detectTimer.unref === "function") this._detectTimer.unref();
     this._detect().catch(() => {});
+  }
+
+  /**
+   * What has to stop on `node` before `targetId` can start there.
+   *
+   * Uses the node's REAL available memory (not the composer's estimate), so
+   * anything else holding memory is accounted for. A target whose footprint was
+   * never measured claims the whole node: everything on it is listed. Otherwise
+   * the biggest models go first, so as few as possible are stopped. A dual
+   * model is listed with both nodes — stopping it frees both.
+   */
+  planRoom(node, targetId) {
+    const target = this.catalog.getModel(targetId);
+    if (!target) return null;
+    const firstRun = target.footprintKnown === false;
+    const budget = this.catalog.nodeBudgetGB(node);
+    const needGB = firstRun ? budget : Number(target.weightGB) || 0;
+    const state = this.getState();
+    const pn = state.perNode[node] || { running: [], perModel: {}, ramUsed: 0 };
+    const seen = new Set();
+    const running = pn.running.filter((r) => r.id !== targetId && !seen.has(r.id) && seen.add(r.id));
+    const footprint = (id) =>
+      pn.perModel?.[id]?.footprintGB ?? (Number(this.catalog.getModel(id)?.weightGB) || 0);
+    const mem = this.nodeMemory?.(node);
+    const freeGB = mem
+      ? Math.max(0, mem.availableGB - this.catalog.reserveGB())
+      : Math.max(0, budget - (pn.ramUsed || 0));
+
+    let victims = [];
+    if (firstRun) {
+      victims = running;
+    } else if (freeGB < needGB) {
+      let freed = 0;
+      for (const r of [...running].sort((a, b) => footprint(b.id) - footprint(a.id))) {
+        if (freeGB + freed >= needGB) break;
+        victims.push(r);
+        freed += footprint(r.id);
+      }
+    }
+    const freedGB = victims.reduce((s, r) => s + footprint(r.id), 0);
+    return {
+      node,
+      targetId,
+      targetName: target.displayName || target.id,
+      firstRun,
+      needGB: Math.round(needGB),
+      freeGB: Math.round(freeGB),
+      fits: firstRun || freeGB + freedGB >= needGB,
+      victims: victims.map((r) => {
+        const m = this.catalog.getModel(r.id);
+        return {
+          id: r.id,
+          name: m?.displayName || r.id,
+          footprintGB: Math.round(footprint(r.id)),
+          nodes: m?.placement === "dual" ? m.nodes : [node],
+        };
+      }),
+    };
+  }
+
+  /**
+   * Stop the plan's victims, wait until the memory is really free, then start
+   * the target. Runs as an apply (blocks other applies, streams to the log).
+   */
+  async makeRoomAndStart(plan) {
+    if (this._applying) throw new Error("An apply is already in progress");
+    this._applying = true;
+    this._cancelled = false;
+    this._error = null;
+    this._log = [];
+    this._setPhase("applying");
+    try {
+      if (plan.victims.length) {
+        this._appendLog(
+          `Making room on ${plan.node} for ${plan.targetName}: stopping ${plan.victims.map((v) => v.name).join(", ")}`
+        );
+      }
+      for (const v of plan.victims) {
+        if (this._cancelled) throw new Error("cancelled");
+        const m = this.catalog.getModel(v.id);
+        const node = m?.placement === "dual" ? Object.keys(m.launch || {})[0] : plan.node;
+        const spec = m?.launch?.[node] || Object.values(m?.launch || {})[0];
+        if (!spec) continue;
+        this._appendLog(`Stopping ${v.name}${v.nodes.length > 1 ? ` (${v.nodes.join(" + ")})` : ""}…`);
+        await this._runAction(v.id, node, spec, "stop").catch((e) =>
+          this._appendLog(`[warn] stop ${v.name}: ${e.message}`)
+        );
+      }
+      if (plan.victims.length || plan.needGB > 0) {
+        const need = plan.firstRun ? 0 : plan.needGB;
+        this._appendLog(`Waiting for ${need ? `${need} GB` : "memory"} to be free on ${plan.node}…`);
+        if (!(await this._waitFree(plan.node, need))) {
+          throw new Error(`${plan.node} still lacks ${need} GB after stopping — not starting ${plan.targetName}`);
+        }
+      }
+      const target = this.catalog.getModel(plan.targetId);
+      this._appendLog(`Starting ${plan.targetName} on ${plan.node}…`);
+      await this._runAction(plan.targetId, plan.node, target.launch[plan.node], "start");
+      this._appendLog(`[ready] ${plan.targetName} is loading`);
+      this._applying = false;
+      await this._detect();
+      this._setPhase("idle");
+    } catch (e) {
+      this._error = e.message;
+      this._appendLog(`[error] ${e.message}`);
+      this._setPhase("failed");
+    } finally {
+      this._applying = false;
+      this._emit();
+    }
+  }
+
+  /** memcheck.sh on a node: waits (up to 4 min) for `needGB` free, dropping the page cache. */
+  _waitFree(node, needGB) {
+    const info = this._nodeExec(node);
+    if (!info) return Promise.resolve(true);
+    const n = String(Math.max(0, Math.round(needGB)));
+    const [file, args] =
+      info.target === "ssh"
+        ? ["ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", info.host, `${MEMCHECK} ${n}`]]
+        : [MEMCHECK, [n]];
+    return new Promise((resolve) => {
+      execFile(file, args, { timeout: 300000 }, (err, _out, stderr) => {
+        if (stderr) for (const l of String(stderr).split("\n").filter(Boolean)) this._appendLog(`[${node}] ${l}`);
+        resolve(!err);
+      });
+    });
+  }
+
+  /**
+   * Treat user-registered launcher models as bricks: they join the catalog,
+   * count against node memory, can be stopped to make room, and are routed
+   * through the gateway once their served name is known.
+   * @param {import('./launcherBridge.js').LauncherBridge} bridge
+   */
+  attachLauncherBridge(bridge) {
+    this.launchers = bridge;
+    this.catalog.setExtraModels(() => bridge.bricks());
   }
 
   dispose() {
@@ -250,13 +399,55 @@ export class ComposerManager {
   _recordLoad(id, startedAtMs, now = Date.now()) {
     const sec = Math.round((now - startedAtMs) / 1000);
     if (!(sec > 0) || sec > MAX_RECORDED_LOAD_SEC) return;
-    const list = [...(this._loadTimes[id] || []), sec].slice(-LOAD_HISTORY_MAX);
-    this._loadTimes[id] = list;
+    this.stats?.recordLoad(id, sec);
     this._appendLog(`[ready] ${id} came up in ${sec}s`);
-    try {
-      fs.writeFileSync(this._sidecarPath("load-times.json"), JSON.stringify(this._loadTimes, null, 2));
-    } catch (e) {
-      this._appendLog(`[warn] could not persist load times: ${e.message}`);
+  }
+
+  /**
+   * Start measuring a brick's peak memory: baseline = node memory in use now,
+   * right before it loads (exact), or when first seen already loading (approx).
+   * A new start on a node ends the attribution window of models already on it,
+   * so a co-resident's memory is never charged to them.
+   */
+  beginPeak(id, node, { approx = false } = {}) {
+    if (!this.nodeMemory || !this.stats) return;
+    const m = this.catalog.getModel(id);
+    if (!m) return;
+    const nodes = m.placement === "dual" ? m.nodes || [node] : [node];
+    const baseline = {};
+    for (const n of nodes) {
+      const mem = this.nodeMemory(n);
+      if (!mem) return;
+      baseline[n] = mem.usedGB;
+    }
+    for (const [other, run] of this._peakRuns) {
+      if (other !== id && run.nodes.some((n) => nodes.includes(n))) run.frozen = true;
+    }
+    this.stats.beginPeakRun(id, { approx });
+    this._peakRuns.set(id, { nodes, baseline, frozen: false, approx, startedAt: Date.now() });
+  }
+
+  /** Raise each open run's peak from live node memory; close runs whose model left. */
+  _trackPeaks(running, now = Date.now()) {
+    if (!this.nodeMemory || !this.stats) return;
+    this._peakRuns ??= new Map();
+    const live = new Set(running.map((r) => r.id));
+    for (const r of running) {
+      if (r.state === "loading" && !this._peakRuns.has(r.id)) this.beginPeak(r.id, r.node, { approx: true });
+    }
+    for (const [id, run] of [...this._peakRuns]) {
+      // A just-started model may not be detected yet: give it a moment.
+      if (!live.has(id)) {
+        if (now - run.startedAt > 120_000) this._peakRuns.delete(id);
+        continue;
+      }
+      if (run.frozen) continue;
+      let delta = 0;
+      for (const n of run.nodes) {
+        const mem = this.nodeMemory(n);
+        if (mem) delta = Math.max(delta, mem.usedGB - run.baseline[n]);
+      }
+      this.stats.updatePeak(id, delta);
     }
   }
 
@@ -323,7 +514,6 @@ export class ComposerManager {
     // "nothing running" exactly while the user was waiting to see the load.
     if (this._disposed) return;
     this._loadStart ??= new Map();
-    this._loadTimes ??= {};
     this._lastReadyAt ??= new Map();
     this._gatewaySeenAt ??= new Map();
     // (1) Probe every eligible endpoint in PARALLEL — sequential probing stalls
@@ -393,13 +583,44 @@ export class ComposerManager {
         }
       }
     }
+    const now = Date.now();
+    // Launcher models: upstream's status check says the process is alive, but
+    // the API does not answer yet => loading.
+    const launcherRunning = this.launchers ? await this.launchers.runningIds() : new Set();
+    for (const model of this.catalog.models) {
+      if (!model.launcher || readyIds.has(model.id) || !launcherRunning.has(model.id)) continue;
+      const node = model.nodes[0];
+      if (!this._gatewaySeenAt.has(model.id)) this._gatewaySeenAt.set(model.id, now);
+      loadingFound.push({
+        id: model.id,
+        node,
+        port: model.port,
+        servedModel: model.servedModel,
+        up: false,
+        state: "loading",
+        startedAtMs: this._gatewaySeenAt.get(model.id),
+      });
+    }
+    // Learn a launcher model's served name the first time it answers.
+    await Promise.all(
+      readyFound
+        .filter((r) => this.catalog.getModel(r.id)?.launcher && !this.stats?.servedModel(r.id))
+        .map(async (r) => {
+          const ready = this.catalog.getModel(r.id).launch[r.node]?.ready;
+          const served = ready && (await this._firstModelId(ready));
+          if (served) {
+            this.launchers.learnServed(r.id, served);
+            r.servedModel = served;
+            this._appendLog(`[learn] ${r.id} serves "${served}" — added to the gateway on the next Apply`);
+          }
+        })
+    );
     // Bricks with no container (ds4, MiMo, script-launched…) are only visible
     // as loading through the gateway, which reports what it is starting.
-    const now = Date.now();
     const starting = await this._gatewayStarting();
     const startingNames = new Set(starting.map((g) => g.model));
     for (const model of this.catalog.models) {
-      if (model.gateway === false || readyIds.has(model.id)) continue;
+      if (model.gateway === false || model.launcher || readyIds.has(model.id)) continue;
       if (loadingFound.some((r) => r.id === model.id)) continue;
       const nodes = Object.keys(model.launch || {});
       const served = (n) => model.launch[n]?.ready?.servedModel || model.servedModel || model.id;
@@ -445,7 +666,7 @@ export class ComposerManager {
         r.progress = loadProgress({
           startedAtMs: r.startedAtMs,
           now,
-          history: this._loadTimes[r.id],
+          history: this.stats?.loads(r.id),
           ...parseLoadPhase(lines),
         });
       })
@@ -479,6 +700,7 @@ export class ComposerManager {
     }
     const changed = JSON.stringify(running) !== JSON.stringify(this._running);
     this._running = running;
+    this._trackPeaks(running);
     if (changed) this._emit();
 
     // Never repair mid-apply: the apply itself may be stopping/starting pairs.
@@ -593,6 +815,21 @@ export class ComposerManager {
     });
   }
 
+  /** First model id an endpoint reports (original case), or null. */
+  async _firstModelId(ready) {
+    try {
+      const res = await fetch(`http://${ready.host || "127.0.0.1"}:${ready.port}/v1/models`, {
+        signal: AbortSignal.timeout(3500),
+      });
+      if (!res.ok) return null;
+      const d = await res.json().catch(() => null);
+      const id = d?.data?.[0]?.id;
+      return typeof id === "string" && id ? id : null;
+    } catch {
+      return null;
+    }
+  }
+
   async _probeReady(ready) {
     const host = ready.host || "127.0.0.1";
     try {
@@ -705,9 +942,12 @@ export class ComposerManager {
       // A brick with `gateway:false` is not an OpenAI chat backend (jeff answers
       // /v1/systemone only), so llama-swap can neither load nor proxy it. Those
       // are started directly here and kept out of the gateway's desired set.
-      const directUnits = desired.filter((u) => u.model.gateway === false);
+      // Launcher models are started through upstream's launcher (it owns their
+      // scripts); llama-swap adopts them on first request via its ready guard.
+      const isDirect = (u) => u.model.gateway === false || Boolean(u.model.launcher);
+      const directUnits = desired.filter(isDirect);
       const desiredNames = desired
-        .filter((u) => u.model.gateway !== false)
+        .filter((u) => !isDirect(u))
         .map((u) => u.spec.ready?.servedModel || u.model.servedModel || u.id);
 
       for (const u of directUnits) {
@@ -756,6 +996,8 @@ export class ComposerManager {
           continue;
         }
         this._appendLog(`Asking gateway to load ${name}…`);
+        const unit = desired.find((d) => !isDirect(d) && (d.spec.ready?.servedModel || d.model.servedModel || d.id) === name);
+        if (unit) this.beginPeak(unit.id, unit.node);
         const ok = await this._gatewayLoad(name);
         this._appendLog(ok ? `[ready] ${name} loaded` : `[warn] gateway could not load ${name}`);
       }
@@ -896,13 +1138,19 @@ export class ComposerManager {
   // ─── Runner (local + ssh), modeled on SetupManager._runComponent ─────────
   _runAction(id, node, spec, action, dynEnv = {}) {
     if (this._disposed) return Promise.reject(new Error("disposed"));
+    if (action === "start") this.beginPeak(id, node);
+    if (spec.target === "launcher") {
+      if (!this.launchers) return Promise.reject(new Error(`${id}: launcher bridge not attached`));
+      if (action === "status") return Promise.resolve();
+      return this.launchers.run(spec.launcher, action).then(() => undefined);
+    }
     const actionSpec = spec[action];
     if (!actionSpec || !actionSpec.cmd) return Promise.resolve();
     const extraEnv = {
       ...(spec.env && typeof spec.env === "object" ? spec.env : {}),
       ...dynEnv, // dynamic GPU_UTIL from the per-node allocation
     };
-    const opts = { env: { ...process.env, ...extraEnv }, detached: true };
+    const opts = { env: childEnv(extraEnv), detached: true };
     let file;
     let args;
     if (spec.target === "ssh") {

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { LauncherAction, LauncherJob, LauncherRunState, LlmLauncher, SparkSnapshot } from "../../api/types";
+import type { LauncherAction, LauncherJob, LauncherRunState, LlmLauncher, RoomPlan, SparkSnapshot } from "../../api/types";
 import { removeLauncher, runLauncher } from "../../api/client";
+import { roomPlanQuestion, roomVictimsText } from "../RoomPlan";
 import { fetchLaunchersCached, invalidateLaunchers, patchCachedStatus } from "../../hooks/launcherCache";
 import { useLauncherJob } from "../../hooks/useLauncherJob";
 import { useModalPresence } from "../../hooks/useModalPresence";
@@ -122,7 +123,8 @@ function TerminalModal({
 type Confirm =
   | { kind: "stop"; id: string }
   | { kind: "remove"; id: string }
-  | { kind: "switch"; id: string; otherId: string };
+  | { kind: "switch"; id: string; otherId: string }
+  | { kind: "room"; id: string; plan: RoomPlan };
 
 /**
  * Models you can start and stop from the dashboard: each is a folder on the Spark
@@ -141,6 +143,7 @@ function LlmModelsPanelFor({ spark, className }: { spark: SparkSnapshot; classNa
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ open: boolean; launcher: LlmLauncher | null }>({ open: false, launcher: null });
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [termOpen, setTermOpen] = useState(false);
@@ -212,12 +215,23 @@ function LlmModelsPanelFor({ spark, className }: { spark: SparkSnapshot; classNa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job, queuedStart, refresh]);
 
-  async function run(launcherId: string, action: LauncherAction) {
+  async function run(launcherId: string, action: LauncherAction, makeRoom = false) {
     setActionError(null);
+    setNotice(null);
     setConfirm(null);
     try {
-      const res = await runLauncher(sparkId, launcherId, action);
-      follow(res.job);
+      const res = await runLauncher(sparkId, launcherId, action, makeRoom ? { makeRoom: true } : undefined);
+      // The composer must stop other models first: nothing started yet — ask.
+      if (res.needsRoom && res.plan) {
+        setConfirm({ kind: "room", id: launcherId, plan: res.plan });
+        return;
+      }
+      if (res.makingRoom && res.plan) {
+        setNotice(`Stopping ${roomVictimsText(res.plan)}; ${res.plan.targetName} starts once the memory is free (progress in Compose).`);
+        patchCachedStatus(sparkId, launcherId, "running");
+        return;
+      }
+      if (res.job) follow(res.job);
       if (action === "start" || action === "attach") {
         patchCachedStatus(sparkId, launcherId, "running");
         setStatuses((s) => ({ ...s, [launcherId]: "running" }));
@@ -230,6 +244,9 @@ function LlmModelsPanelFor({ spark, className }: { spark: SparkSnapshot; classNa
   }
 
   function requestStart(l: LlmLauncher) {
+    // With a port the composer manages this model: the server works out what
+    // has to stop (any model, not just launchers) and we ask from its plan.
+    if (l.port != null) return void run(l.id, "start");
     const other = launchers.find((x) => x.id !== l.id && statuses[x.id] === "running");
     if (other) setConfirm({ kind: "switch", id: l.id, otherId: other.id });
     else void run(l.id, "start");
@@ -312,6 +329,16 @@ function LlmModelsPanelFor({ spark, className }: { spark: SparkSnapshot; classNa
               <span className="sp-launch__ask">Run {l.stopScript}?</span>
               <button type="button" className="btn btn--sm btn--danger" onClick={() => void run(l.id, "stop")}>
                 Stop
+              </button>
+              <button type="button" className="btn btn--sm btn--ghost" onClick={() => setConfirm(null)}>
+                Cancel
+              </button>
+            </>
+          ) : pending?.kind === "room" ? (
+            <>
+              <span className="sp-launch__ask">{roomPlanQuestion(pending.plan)}</span>
+              <button type="button" className="btn btn--sm btn--primary" onClick={() => void run(l.id, "start", true)}>
+                Stop &amp; start
               </button>
               <button type="button" className="btn btn--sm btn--ghost" onClick={() => setConfirm(null)}>
                 Cancel
@@ -442,6 +469,11 @@ function LlmModelsPanelFor({ spark, className }: { spark: SparkSnapshot; classNa
         {actionError ? (
           <p className="sp-models__error" role="alert">
             {actionError}
+          </p>
+        ) : null}
+        {notice ? (
+          <p className="sp-models__hint" role="status">
+            {notice}
           </p>
         ) : null}
 

@@ -1239,6 +1239,13 @@ export interface ComposerBrick {
   port: number | null;
   servedModel: string;
   notes: string;
+  /** Highest measured peak memory (GB), persisted across restarts. */
+  measuredPeakGB?: number;
+  /** Configured estimate, when a measured peak replaced it for placement. */
+  estimateGB?: number;
+  /** A user-registered launcher model (start.sh / stop.sh). */
+  launcher?: boolean;
+  footprintKnown?: boolean;
 }
 
 export interface ComposerCatalog {
@@ -1334,6 +1341,28 @@ export type LlmLauncherInput = {
 };
 
 export type LauncherAction = "start" | "stop" | "attach";
+
+/** What has to stop before a model can start on a node (composer room check). */
+export interface RoomPlan {
+  node: string;
+  targetId: string;
+  targetName: string;
+  /** Peak memory never measured: the start clears the whole node. */
+  firstRun: boolean;
+  needGB: number;
+  freeGB: number;
+  fits: boolean;
+  victims: { id: string; name: string; footprintGB: number; nodes: string[] }[];
+}
+
+export interface LauncherRunResult {
+  job: LauncherJob | null;
+  /** Starting needs other models stopped: nothing was started, ask the user. */
+  needsRoom?: boolean;
+  /** Confirmed: the server is stopping the plan's models, then starts this one. */
+  makingRoom?: boolean;
+  plan?: RoomPlan;
+}
 export type LauncherJobStatus = "running" | "completed" | "failed" | "cancelled" | "detached";
 export type LauncherRunState = "running" | "stopped" | "unknown";
 
