@@ -54,6 +54,10 @@ export class ModelCatalog {
     if (measuredPeakGB == null) return m;
     if (Number(m.maxUtil) > 0) return { ...m, measuredPeakGB };
     const estimate = Number(m.weightGB != null ? m.weightGB : m.ramGB) || 0;
+    // `wholeNode`: the engine sizes its cache from whatever is free and keeps
+    // GROWING into it while serving (TensorFold), so an idle peak understates
+    // it. A peak may raise the claim, never lower it below the estimate.
+    if (m.wholeNode) return { ...m, weightGB: Math.max(estimate, measuredPeakGB), estimateGB: estimate, measuredPeakGB };
     const gb = peak.exact ?? Math.max(estimate, peak.approx);
     return { ...m, weightGB: gb, estimateGB: estimate, measuredPeakGB };
   }

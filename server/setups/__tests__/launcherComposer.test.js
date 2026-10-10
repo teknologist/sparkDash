@@ -244,3 +244,13 @@ test("a launcher may not take a port a composer model already serves on that Spa
   assert.equal(composerPortConflict(models, "spark2", 9000), null);
   assert.equal(composerPortConflict(models, "spark2", null), null, "no port: not composer-managed, nothing to clash");
 });
+
+// Qwen3.8 on TensorFold measured 74 GB idle, but its cache grows into free
+// memory while serving. Shrinking its claim to 74 would let another model in,
+// and the growth would then exhaust the node (which freezes a Spark).
+test("a wholeNode model's measured peak can raise its claim but never lower it", () => {
+  const q = { id: "q38", placement: "single", nodes: ["spark1"], weightGB: 104, wholeNode: true, launch: {} };
+  assert.equal(catalogWith([q], { q38: { peaks: [{ gb: 74, at: 1 }] } }).getModel("q38").weightGB, 104);
+  assert.equal(catalogWith([q], { q38: { peaks: [{ gb: 110, at: 1 }] } }).getModel("q38").weightGB, 110);
+  assert.equal(catalogWith([q], { q38: { peaks: [{ gb: 74, at: 1 }] } }).getModel("q38").measuredPeakGB, 74, "still shown");
+});
