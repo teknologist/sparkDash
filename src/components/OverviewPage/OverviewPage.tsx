@@ -6,6 +6,7 @@ import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { MetricBar } from "../ui/MetricBar";
 import { Sparkline } from "../ui/Sparkline";
 import { useMetricsHistoryTail } from "../../hooks/metricsStore";
+import { LoadProgressBar, loadProgressText, loadProgressTitle } from "../LoadProgress";
 import { ActivityIcon, PowerOffIcon, PowerOnIcon } from "../ui/icons";
 
 interface OverviewPageProps {
@@ -293,7 +294,7 @@ function SparkCard({
                       m.dual ? "border-warning/50 bg-warning/10" : "border-border bg-surface-elevated"
                     }`}
                     title={`port ${m.port} · ${
-                      m.up ? "serving" : m.state === "loading" ? "loading (model initializing)" : "starting / not ready"
+                      m.up ? "serving" : m.state === "loading" ? loadProgressTitle(m.progress) : "starting / not ready"
                     }${m.dual ? " · whole-cluster (dual TP=2)" : ""}`}
                   >
                     <span
@@ -338,6 +339,17 @@ function SparkCard({
                   );
                 })}
               </div>
+              {spark.runningModels
+                .filter((m) => !m.up && m.state === "loading")
+                .map((m) => (
+                  <div key={`load-${m.model}`} className="mt-2 space-y-1">
+                    <div className="flex items-baseline justify-between gap-2 text-[10px]">
+                      <span className="truncate text-warning">{loadProgressText(m.progress)}</span>
+                      <span className="shrink-0 truncate text-muted">{m.model}</span>
+                    </div>
+                    <LoadProgressBar progress={m.progress} />
+                  </div>
+                ))}
             </div>
           )}
 

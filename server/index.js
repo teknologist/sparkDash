@@ -161,6 +161,7 @@ function runningModelsBySpark() {
         port: r.port,
         up: r.up !== false,
         ...(r.state ? { state: r.state } : {}),
+        ...(r.progress ? { progress: r.progress } : {}),
         ...(isDual(r.id) ? { dual: true } : {}),
       });
     }

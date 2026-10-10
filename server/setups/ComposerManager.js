@@ -3,12 +3,24 @@ import { spawn, execFile } from "child_process";
 import { ModelCatalog } from "./ModelCatalog.js";
 import { generateLlamaSwapConfig } from "./llamaSwapGen.js";
 import { allocateNode } from "./nodeAlloc.js";
+import { parseLoadPhase, loadProgress, LOAD_HISTORY_MAX } from "./loadProgress.js";
 import { COMPOSITIONS_PATH, LLAMA_SWAP_CONFIG_PATH, LLAMA_SWAP_URL } from "../config.js";
 
 const DETECT_INTERVAL_MS = 5000;
 const READY_TIMEOUT_MS = 180000;
 const READY_POLL_MS = 5000;
 const LOG_MAX = 400;
+/**
+ * How long a dual brick's peer container may run without its head before it is
+ * reaped. A normal start launches the worker and then the head seconds apart, so
+ * this only ever catches a half left behind by a stop that could not reach the
+ * peer (observed: a GLM worker held 103 GiB on spark2 for 3 days, so every later
+ * GLM start failed its memory check).
+ */
+const ORPHAN_GRACE_MS = 3 * 60 * 1000;
+const CONTAINER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+/** A "load" longer than this is a detection glitch, never recorded as a load time. */
+const MAX_RECORDED_LOAD_SEC = 3 * 60 * 60;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -140,6 +152,12 @@ export class ComposerManager {
      * model still matches the plan or is squatting a stale (larger) share.
      */
     this._launchedUtil = this._loadLaunchedUtil();
+    /** First time each `container@node` was seen orphaned (see _reapOrphans). */
+    this._orphanSince = new Map();
+    /** Measured load durations (s) per brick id, newest last — drives the ETA. */
+    this._loadTimes = this._readJsonSidecar("load-times.json");
+    /** Container start (ms) of each brick seen loading, until it serves. */
+    this._loadStart = new Map();
     /** @type {null | (() => void)} */
     this.onChange = null;
 
@@ -214,6 +232,34 @@ export class ComposerManager {
    * boot, every serving elastic model reads as "unknown", and the next apply
    * needlessly re-launches healthy models (a multi-minute reload each).
    */
+  /** A state file next to compositions.json (config/, survives restarts and reboots). */
+  _sidecarPath(name) {
+    return COMPOSITIONS_PATH.replace(/[^/]+$/, name);
+  }
+
+  _readJsonSidecar(name) {
+    try {
+      const d = JSON.parse(fs.readFileSync(this._sidecarPath(name), "utf-8"));
+      return d && typeof d === "object" && !Array.isArray(d) ? d : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** A brick that was seen loading now serves: remember how long it took. */
+  _recordLoad(id, startedAtMs, now = Date.now()) {
+    const sec = Math.round((now - startedAtMs) / 1000);
+    if (!(sec > 0) || sec > MAX_RECORDED_LOAD_SEC) return;
+    const list = [...(this._loadTimes[id] || []), sec].slice(-LOAD_HISTORY_MAX);
+    this._loadTimes[id] = list;
+    this._appendLog(`[ready] ${id} came up in ${sec}s`);
+    try {
+      fs.writeFileSync(this._sidecarPath("load-times.json"), JSON.stringify(this._loadTimes, null, 2));
+    } catch (e) {
+      this._appendLog(`[warn] could not persist load times: ${e.message}`);
+    }
+  }
+
   _loadLaunchedUtil() {
     try {
       const d = JSON.parse(fs.readFileSync(this._launchedUtilPath(), "utf-8"));
@@ -272,7 +318,14 @@ export class ComposerManager {
   }
 
   async _detect() {
-    if (this._disposed || this._applying) return;
+    // NOT gated on _applying: an apply blocks in the gateway load for the whole
+    // cold start (minutes), and skipping detection then froze the board on
+    // "nothing running" exactly while the user was waiting to see the load.
+    if (this._disposed) return;
+    this._loadStart ??= new Map();
+    this._loadTimes ??= {};
+    this._lastReadyAt ??= new Map();
+    this._gatewaySeenAt ??= new Map();
     // (1) Probe every eligible endpoint in PARALLEL — sequential probing stalls
     // on each down endpoint's timeout and made the board lag reality. A model
     // that answers /v1/models with its servedModel is READY (serving).
@@ -314,6 +367,7 @@ export class ComposerManager {
       const eligible = Array.isArray(model.nodes) ? model.nodes : Object.keys(model.launch || {});
       containerBricks.push({ model, eligible });
       for (const node of eligible) nodesNeeded.add(node);
+      for (const node of Object.keys(model.peerContainers || {})) nodesNeeded.add(node);
     }
     const contByNode = {};
     await Promise.all(
@@ -333,11 +387,78 @@ export class ComposerManager {
             servedModel: model.servedModel || model.id,
             up: false,
             state: "loading",
+            container: model.container,
           });
           break; // a model loads on one node
         }
       }
     }
+    // Bricks with no container (ds4, MiMo, script-launched…) are only visible
+    // as loading through the gateway, which reports what it is starting.
+    const now = Date.now();
+    const starting = await this._gatewayStarting();
+    const startingNames = new Set(starting.map((g) => g.model));
+    for (const model of this.catalog.models) {
+      if (model.gateway === false || readyIds.has(model.id)) continue;
+      if (loadingFound.some((r) => r.id === model.id)) continue;
+      const nodes = Object.keys(model.launch || {});
+      const served = (n) => model.launch[n]?.ready?.servedModel || model.servedModel || model.id;
+      const hit = starting.find((g) => nodes.some((n) => served(n) === g.model));
+      if (!hit) continue;
+      // Which node: the one whose ready endpoint the gateway proxies to.
+      const node =
+        nodes.find((n) => {
+          const r = model.launch[n]?.ready;
+          return r && served(n) === hit.model && hit.proxy === `http://${r.host || "127.0.0.1"}:${r.port}`;
+        }) ?? nodes[0];
+      if (!this._gatewaySeenAt.has(model.id)) this._gatewaySeenAt.set(model.id, now);
+      loadingFound.push({
+        id: model.id,
+        node,
+        port: model.launch[node]?.ready?.port ?? model.port,
+        servedModel: served(node),
+        up: false,
+        state: "loading",
+        startedAtMs: this._gatewaySeenAt.get(model.id),
+      });
+    }
+    for (const id of [...this._gatewaySeenAt.keys()]) {
+      if (!loadingFound.some((r) => r.id === id && r.startedAtMs != null)) this._gatewaySeenAt.delete(id);
+    }
+
+    // Progress for each loading brick: phase from its container's log tail
+    // (when it has one), ETA from this brick's past loads.
+    await Promise.all(
+      loadingFound.map(async (r) => {
+        let lines = [];
+        if (r.container) {
+          const info = await this._containerLoadInfo(r.node, r.container);
+          delete r.container;
+          if (!info) return;
+          r.startedAtMs = info.startedAtMs;
+          lines = info.lines;
+        }
+        if (r.startedAtMs == null) return;
+        // Serving AFTER this start means the brick never left: a probe blip,
+        // not a load. Timing it would record days (the container's age).
+        if ((this._lastReadyAt.get(r.id) ?? 0) <= r.startedAtMs) this._loadStart.set(r.id, r.startedAtMs);
+        r.progress = loadProgress({
+          startedAtMs: r.startedAtMs,
+          now,
+          history: this._loadTimes[r.id],
+          ...parseLoadPhase(lines),
+        });
+      })
+    );
+    for (const r of loadingFound) delete r.startedAtMs;
+    // A brick seen loading that now serves: record its load time. One that
+    // vanished without serving (failed/stopped) is dropped unrecorded.
+    const loadingIds = new Set(loadingFound.map((r) => r.id));
+    for (const [id, startedAtMs] of [...this._loadStart]) {
+      if (readyIds.has(id)) this._recordLoad(id, startedAtMs, now);
+      if (readyIds.has(id) || !loadingIds.has(id)) this._loadStart.delete(id);
+    }
+    for (const id of readyIds) this._lastReadyAt.set(id, now);
 
     // (3) Merge — one entry per model PER NODE; a serving endpoint wins over a
     // loading one. Keyed by id@node rather than id alone: a small brick can
@@ -359,6 +480,88 @@ export class ComposerManager {
     const changed = JSON.stringify(running) !== JSON.stringify(this._running);
     this._running = running;
     if (changed) this._emit();
+
+    // Never repair mid-apply: the apply itself may be stopping/starting pairs.
+    if (!this._applying) await this._reapOrphans(containerBricks, contByNode);
+  }
+
+  /**
+   * Container start time and log tail on a node, in ONE command. Start time
+   * comes from docker (not first-seen) so elapsed/ETA survive a dashboard restart.
+   * @returns {Promise<null | { startedAtMs: number, lines: string[] }>}
+   */
+  _containerLoadInfo(node, name) {
+    const info = this._nodeExec(node);
+    if (!info || !CONTAINER_NAME_RE.test(name)) return Promise.resolve(null);
+    const cmd = `docker inspect -f '{{.State.StartedAt}}' ${name} && docker logs --tail 80 ${name} 2>&1`;
+    const [file, args] =
+      info.target === "ssh"
+        ? ["ssh", ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=6", "--", info.host, cmd]]
+        : ["bash", ["-c", cmd]];
+    return new Promise((resolve) => {
+      execFile(file, args, { timeout: 8000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+        if (err) return resolve(null);
+        const [first, ...lines] = String(stdout).split("\n");
+        const startedAtMs = Date.parse(first.trim());
+        if (!Number.isFinite(startedAtMs)) return resolve(null);
+        resolve({ startedAtMs, lines: lines.filter(Boolean) });
+      });
+    });
+  }
+
+  /**
+   * Auto-repair: remove a dual brick's peer container (e.g. the TP worker) that
+   * outlived its head. Without its head it serves nothing yet keeps its full
+   * memory share, which makes every later start of that brick — or anything
+   * else on that node — fail. Only bricks that declare `peerContainers` are
+   * touched, only when not serving and the head container is gone, and only
+   * after ORPHAN_GRACE_MS of continuous orphanhood.
+   */
+  async _reapOrphans(containerBricks, contByNode, now = Date.now()) {
+    this._orphanSince ??= new Map();
+    const seen = new Set();
+    for (const { model } of containerBricks) {
+      if (model.placement !== "dual" || !model.peerContainers) continue;
+      const headNode = Object.keys(model.launch || {})[0];
+      // Unknown head state (docker ps failed → empty set) must not read as "gone":
+      // only judge when the head node actually answered.
+      const headSet = contByNode[headNode];
+      if (!headSet || !headSet.answered || headSet.has(model.container)) continue;
+      for (const [node, names] of Object.entries(model.peerContainers)) {
+        for (const name of names || []) {
+          if (!CONTAINER_NAME_RE.test(name) || !contByNode[node]?.has(name)) continue;
+          const key = `${name}@${node}`;
+          seen.add(key);
+          const since = this._orphanSince.get(key) ?? now;
+          this._orphanSince.set(key, since);
+          if (now - since < ORPHAN_GRACE_MS) continue;
+          this._orphanSince.delete(key);
+          this._appendLog(
+            `[repair] ${model.id}: ${name} on ${node} has run without its head for ${Math.round((now - since) / 1000)}s — removing it`
+          );
+          const ok = await this._removeContainer(node, name);
+          this._appendLog(ok ? `[repair] removed ${name} on ${node}` : `[warn] could not remove ${name} on ${node}`);
+          this._emit();
+        }
+      }
+    }
+    for (const key of [...this._orphanSince.keys()]) {
+      if (!seen.has(key)) this._orphanSince.delete(key);
+    }
+  }
+
+  /** `docker rm -f <name>` on a node (local or over the composer's ssh host). */
+  _removeContainer(node, name) {
+    const info = this._nodeExec(node);
+    if (!info || !CONTAINER_NAME_RE.test(name)) return Promise.resolve(false);
+    const file = info.target === "ssh" ? "ssh" : "docker";
+    const args =
+      info.target === "ssh"
+        ? ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=8", "--", info.host, `docker rm -f ${name}`]
+        : ["rm", "-f", name];
+    return new Promise((resolve) => {
+      execFile(file, args, { timeout: 60000 }, (err) => resolve(!err));
+    });
   }
 
   /** node → exec target (local on spark1, ssh host elsewhere), from any launch spec. */
@@ -383,7 +586,9 @@ export class ComposerManager {
     return new Promise((resolve) => {
       execFile(file, args, { timeout: 6000 }, (err, stdout) => {
         if (err) return resolve(new Set());
-        resolve(new Set(String(stdout).split("\n").map((s) => s.trim()).filter(Boolean)));
+        const names = new Set(String(stdout).split("\n").map((s) => s.trim()).filter(Boolean));
+        names.answered = true; // distinguishes "no containers" from "docker ps failed"
+        resolve(names);
       });
     });
   }
@@ -624,6 +829,20 @@ export class ComposerManager {
       if (!res.ok) return [];
       const d = await res.json().catch(() => null);
       return (d?.running || []).map((r) => r.model).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Models the gateway is currently starting: [{ model, proxy }]. Empty on any error. */
+  async _gatewayStarting() {
+    try {
+      const res = await fetch(`${LLAMA_SWAP_URL}/running`, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return [];
+      const d = await res.json().catch(() => null);
+      return (d?.running || [])
+        .filter((r) => r.model && r.state === "starting")
+        .map((r) => ({ model: r.model, proxy: r.proxy || null }));
     } catch {
       return [];
     }

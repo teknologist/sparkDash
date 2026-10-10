@@ -10,7 +10,8 @@ import {
   saveComposerPreset,
   verifyComposition,
 } from "../../api/client";
-import type { Assignment, ComposerBrick, ComposerCatalog, ComposerState } from "../../api/types";
+import type { Assignment, ComposerBrick, ComposerCatalog, ComposerRunning, ComposerState } from "../../api/types";
+import { LoadProgressBar, loadProgressText, loadProgressTitle } from "../LoadProgress";
 
 interface Props {
   open: boolean;
@@ -205,6 +206,15 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
   const applying = state?.applying ?? false;
   const phase = state?.phase ?? "idle";
   const log = state?.log ?? [];
+  // Models whose container is up but API not yet serving (dual ones appear on
+  // every node they span — show each once).
+  const loadingModels = useMemo(() => {
+    const seen = new Map<string, ComposerRunning>();
+    for (const pn of Object.values(state?.perNode ?? {})) {
+      for (const r of pn.running) if (r.state === "loading" && !seen.has(r.id)) seen.set(r.id, r);
+    }
+    return [...seen.values()];
+  }, [state?.perNode]);
 
   // `dirty` = the user has started editing; until then the board tracks the
   // live running layout so it's always in sync with what's actually loaded.
@@ -398,6 +408,17 @@ export function ModelComposerDialog({ open, onClose, state }: Props) {
                 ) : (
                   <span className="text-danger">Apply failed{state?.error ? `: ${state.error}` : ""}</span>
                 )}
+              </div>
+              <div className="mb-2 space-y-2 empty:hidden">
+                {loadingModels.map((r) => (
+                  <div key={r.id} className="space-y-1" title={loadProgressTitle(r.progress)}>
+                    <div className="flex items-baseline justify-between gap-2 text-[11px]">
+                      <span className="truncate text-text">{byId.get(r.id)?.displayName ?? r.id}</span>
+                      <span className="shrink-0 text-warning">{loadProgressText(r.progress)}</span>
+                    </div>
+                    <LoadProgressBar progress={r.progress} />
+                  </div>
+                ))}
               </div>
               {log.length > 0 && (
                 <pre
