@@ -334,7 +334,7 @@
       "port": 8005,
       "servedModel": "muse-glimmer",
       "container": "muse-glimmer",
-      "notes": "Meta Muse-Glimmer-30B (Preyazz/Muse-Glimmer-30B-NVFP4) \u2014 multimodal image-text-to-text, dense 30B, arch muse_glimmer. Needs vLLM>=0.28 (vllm-muse:latest, PR vllm#51655). NVFP4 (Blackwell FP4), ctx 128k, util 0.34 (~41 GB: 21.8 weights + 4.8 DFlash drafter + KV). DFlash spec-decode ON (7 tokens; the recipe's 15 device-side-asserts on NVFP4) \u2192 ~27 t/s vs 13 without. Backend port 8005; clients reach it via the llama-swap gateway.",
+      "notes": "Meta Muse-Glimmer-30B (Preyazz/Muse-Glimmer-30B-NVFP4) — multimodal image-text-to-text, dense 30B, arch muse_glimmer. Needs vLLM>=0.28 (vllm-muse:latest, PR vllm#51655). NVFP4 (Blackwell FP4), ctx 128k, util 0.34 (~41 GB: 21.8 weights + 4.8 DFlash drafter + KV). DFlash spec-decode ON (7 tokens; the recipe's 15 device-side-asserts on NVFP4) → ~27 t/s vs 13 without. Backend port 8005; clients reach it via the llama-swap gateway.",
       "maxContext": 131072,
       "inputs": [
         "text",
@@ -425,7 +425,7 @@
       "maxUtil": 0.32,
       "port": 8004,
       "servedModel": "qwen3-vl-ocr",
-      "notes": "NVFP4, ctx 64k, util 0.30-0.32. MEASURED: weights 20.97 GiB + ~4.8 overhead + ~8.0 GiB KV for one 64k request => 34 GB floor (little elasticity; ctx 64k drives the KV floor). (elastic KV \u2014 auto-sized to gpu-memory-utilization, so footprint scales and the declared floor stays honest). Backend port 8004 (moved off 8000 so it can co-reside with entrpi/dual). Runnable on either node (model + vllm-svc.sh + image on both); clients reach it via the llama-swap gateway.",
+      "notes": "NVFP4, ctx 64k, util 0.30-0.32. MEASURED: weights 20.97 GiB + ~4.8 overhead + ~8.0 GiB KV for one 64k request => 34 GB floor (little elasticity; ctx 64k drives the KV floor). (elastic KV — auto-sized to gpu-memory-utilization, so footprint scales and the declared floor stays honest). Backend port 8004 (moved off 8000 so it can co-reside with entrpi/dual). Runnable on either node (model + vllm-svc.sh + image on both); clients reach it via the llama-swap gateway.",
       "maxContext": 65536,
       "inputs": [
         "text",
@@ -842,6 +842,144 @@
             "servedModel": "gliformer-large-v1",
             "endpoint": "/healthz",
             "match": "model"
+          }
+        }
+      }
+    },
+    {
+      "id": "qwen3.8-flash-next",
+      "displayName": "Qwen3.8 Flash Next (TensorFold 1-node)",
+      "backend": "tensorfold",
+      "placement": "single",
+      "nodes": [
+        "spark1",
+        "spark2"
+      ],
+      "weightGB": 104,
+      "port": 8007,
+      "servedModel": "Qwen3.8-Flash-Next",
+      "container": "qwen38-flash-next-tf",
+      "notes": "MiaAI-Lab Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold @364f21a in ~/deploy/qwen38-single on BOTH nodes (.env: PORT=8007). TensorFold Zig engine (tensorfold-qwen38:zig-db28187), INT4-AutoRound checkpoint azampatti/...@1464274 (~122 GiB), FP8 KV, vision on, 262k ctx, PARALLEL 8, MTP drafts. Needs ~92 GiB MemAvailable to start and then sizes its KV pool from MemAvailable minus 10 GiB, so it takes the WHOLE node: weightGB 104 until a measured peak replaces it (model-stats.json). Upstream: ~64 tok/s single stream, ~201 aggregate at 8. start.sh returns once LIVE; stop.sh removes the container.",
+      "maxContext": 262144,
+      "inputs": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputs": [
+        "text"
+      ],
+      "tools": true,
+      "quant": "INT4 AutoRound (GPTQ)",
+      "description": "Qwen3.8 Flash Next (125B-A5B, INT4-AutoRound) on one Spark with TensorFold: MTP drafts, image + video input, 262k context.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "cwd": "/home/eric/deploy/qwen38-single",
+          "startTimeoutMs": 1800000,
+          "start": {
+            "cmd": "/home/eric/deploy/qwen38-single/start.sh",
+            "args": []
+          },
+          "stop": {
+            "cmd": "/home/eric/deploy/qwen38-single/stop.sh",
+            "args": []
+          },
+          "status": {
+            "cmd": "bash",
+            "args": [
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8007/health >/dev/null 2>&1 && echo up || echo down"
+            ]
+          },
+          "ready": {
+            "host": "127.0.0.1",
+            "port": 8007,
+            "servedModel": "Qwen3.8-Flash-Next"
+          }
+        },
+        "spark2": {
+          "target": "ssh",
+          "host": "Spark2",
+          "startTimeoutMs": 1800000,
+          "start": {
+            "cmd": "/home/eric/deploy/qwen38-single/start.sh",
+            "args": []
+          },
+          "stop": {
+            "cmd": "/home/eric/deploy/qwen38-single/stop.sh",
+            "args": []
+          },
+          "status": {
+            "cmd": "bash",
+            "args": [
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8007/health >/dev/null 2>&1 && echo up || echo down"
+            ]
+          },
+          "ready": {
+            "host": "10.100.72.1",
+            "port": 8007,
+            "servedModel": "Qwen3.8-Flash-Next"
+          }
+        }
+      }
+    },
+    {
+      "id": "qwen3.8-flash-next-dual",
+      "displayName": "Qwen3.8 Flash Next NVFP4 (TensorFold dual TP=2)",
+      "backend": "tensorfold",
+      "placement": "dual",
+      "nodes": [
+        "spark1",
+        "spark2"
+      ],
+      "weightGB": 104,
+      "port": 8008,
+      "servedModel": "Qwen3.8-Flash-Next-Dual",
+      "container": "qwen38-fn-tf",
+      "peerContainers": {
+        "spark2": [
+          "qwen38-fn-tf"
+        ]
+      },
+      "notes": "MiaAI-Lab Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold @be3ed85 in ~/deploy/qwen38-dual on spark1 (head; the worker needs no repo). .env: PORT=8008, QUANT=nvfp4 (nvidia/Qwen3.8-Flash-Next-NVFP4@fc694b54, ~124 GiB, all 10 experts), SERVED_NAME=Qwen3.8-Flash-Next-Dual (distinct from the 1-node recipe), WORKER=eric@10.100.72.1 over CX7 RoCE, WORKER_WEIGHTS=copy. Rank 1 = container qwen38-fn-tf on spark2 (same name both sides). ~102 GiB MemAvailable per node for the default 1M window; sizes KV from MemAvailable minus 10 GiB => whole cluster. Upstream: ~67 tok/s single stream, ~390 aggregate at 16.",
+      "maxContext": 1048576,
+      "inputs": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputs": [
+        "text"
+      ],
+      "tools": true,
+      "quant": "NVFP4",
+      "description": "Qwen3.8 Flash Next NVFP4 (full model, 10 experts) across BOTH Sparks (TP=2 over CX7) with TensorFold: MTP drafts, image + video input, 1M context.",
+      "launch": {
+        "spark1": {
+          "target": "local",
+          "cwd": "/home/eric/deploy/qwen38-dual",
+          "startTimeoutMs": 1800000,
+          "start": {
+            "cmd": "/home/eric/deploy/qwen38-dual/start.sh",
+            "args": []
+          },
+          "stop": {
+            "cmd": "/home/eric/deploy/qwen38-dual/stop.sh",
+            "args": []
+          },
+          "status": {
+            "cmd": "bash",
+            "args": [
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8008/health >/dev/null 2>&1 && echo up || echo down"
+            ]
+          },
+          "ready": {
+            "host": "127.0.0.1",
+            "port": 8008,
+            "servedModel": "Qwen3.8-Flash-Next-Dual"
           }
         }
       }
