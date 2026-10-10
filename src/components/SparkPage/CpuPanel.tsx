@@ -1,101 +1,114 @@
-import type { CpuMetrics, RamMetrics, UnifiedMemoryMetrics } from "../../api/types";
-import { Sparkline } from "../ui/Sparkline";
+import type { CpuMetrics, HardwareInfo } from "../../api/types";
+import { TrendLine } from "../ui/TrendLine";
 import { Panel } from "../ui/Panel";
-import { CpuIcon, MemoryIcon } from "../ui/icons";
-import { MetricBar } from "../ui/MetricBar";
+import { CpuIcon } from "../ui/icons";
 import { useMetricsHistoryTail } from "../../hooks/metricsStore";
 
 interface CpuPanelProps {
   cpu: CpuMetrics | null;
-  ram: RamMetrics | null;
+  hardware?: HardwareInfo | null;
   sparkId: string;
-  unifiedMemory: UnifiedMemoryMetrics | null;
+  temperatureUnit: "celsius" | "fahrenheit";
+  className?: string;
 }
 
-function formatMb(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
-  return `${Math.round(mb)} MB`;
+function celsiusToFahrenheit(c: number): number {
+  return Math.round((c * 9) / 5 + 32);
 }
 
-function MetricRow({
-  label,
-  spark,
-  value,
-  color = "var(--color-accent)",
-}: {
-  label: string;
-  spark: React.ReactNode;
-  value: React.ReactNode;
-  color?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between text-sm">
-      <span className="text-muted">{label}</span>
-      <div className="flex items-center gap-2.5">
-        <span style={{ color }}>{spark}</span>
-        <span className="font-tabular text-[13px] font-semibold text-text">{value}</span>
-      </div>
-    </div>
-  );
-}
-
-export function CpuPanel({ cpu, ram, sparkId, unifiedMemory }: CpuPanelProps) {
+/**
+ * CPU panel — usage, temperature, and power for the SoC CPU.
+ *
+ * On GB10 devices (DGX Spark / GX10) the CPU and GPU share one package and
+ * one power envelope, so the CPU is often the part that runs hot first —
+ * this panel makes that visible at the device level. For non-Spark GPU
+ * hosts it covers the discrete CPU.
+ */
+export function CpuPanel({ cpu, hardware, sparkId, temperatureUnit, className }: CpuPanelProps) {
   const usageHistory = useMetricsHistoryTail(sparkId, "cpu.usage");
+  const tempHistory = useMetricsHistoryTail(sparkId, "cpu.temp");
 
   const usage = cpu?.usage ?? 0;
+  const temperature = cpu?.temperature ?? 0;
   const draw = cpu?.draw ?? 0;
   const tdp = cpu?.tdp ?? 0;
 
-  const ramUsed = ram?.used ?? 0;
-  const ramTotal = ram?.total ?? 0;
-  const ramPct = ram?.percentage ?? 0;
-  const ramAvail = ramTotal > 0 ? ramTotal - ramUsed : 0;
+  const displayTemp =
+    temperatureUnit === "fahrenheit" ? celsiusToFahrenheit(temperature) : temperature;
+
+  // GB10 SoC bands: the CPU complex derates in the mid-80s; x86 hosts run
+  // hotter before throttling, so the danger band sits higher.
+  const tempColor =
+    temperature > 95
+      ? "var(--color-danger)"
+      : temperature > 85
+        ? "var(--color-warning)"
+        : "var(--color-accent)";
+
+  const model = hardware?.cpuModel;
+  const cores = hardware?.cpuCores;
+  const socPackage = cpu?.temperatureSource === "acpitz";
 
   return (
-    <Panel title="CPU" icon={<CpuIcon />} className="panel-cpu" bodyClassName="space-y-3" accent>
-      <MetricRow
-        label="Usage"
-        color="var(--color-accent)"
-        spark={<Sparkline data={usageHistory} color="var(--color-accent)" width={180} />}
-        value={<span className="text-text-strong">{usage}%</span>}
-      />
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted">Power</span>
-        <span className="font-tabular text-[13px] text-text">
-          {draw}W / {tdp}W
+    <Panel
+      title="CPU"
+      hint={
+        socPackage
+          ? "ACPI package zone (TSOC on GB10). This is the SoC, not a CPU die and not the GPU junction temperature from nvidia-smi."
+          : undefined
+      }
+      icon={<CpuIcon />}
+      className={`panel-cpu ${className ?? ""}`}
+      bodyClassName="sp-stack"
+    >
+      <div className="sp-duo">
+        <div className="sp-metric">
+          <span className="eyebrow">Usage</span>
+          <div className="big-num sp-big-md">
+            {usage}
+            <small>%</small>
+          </div>
+          <TrendLine data={usageHistory} height={36} color="var(--color-accent)" min={0} max={100} />
+        </div>
+        <div className="sp-metric">
+          <span
+            className="eyebrow"
+            // GB10 exposes no CPU package sensor, so the reading is an ACPI/SoC zone:
+            // say so rather than letting the tile claim it is the CPU (#142).
+            title={
+              cpu?.temperatureSource
+                ? `Reading from ${cpu.temperatureSource} — ${
+                    cpu.temperatureLabel === "CPU"
+                      ? "the CPU package sensor"
+                      : "an ACPI/board thermal zone, not a CPU package sensor"
+                  }`
+                : undefined
+            }
+          >
+            {cpu?.temperatureLabel && cpu.temperatureLabel !== "CPU"
+              ? `Temperature (${cpu.temperatureLabel})`
+              : "Temperature"}
+          </span>
+          <div className="big-num sp-big-md">
+            {displayTemp}
+            <small>{temperatureUnit === "fahrenheit" ? "°F" : "°C"}</small>
+          </div>
+          <TrendLine data={tempHistory} height={36} color={tempColor} />
+        </div>
+      </div>
+      <div className="sp-row">
+        <span className="text-muted">CPU power</span>
+        <span className="mono text-text">
+          {draw}W{tdp > 0 ? ` / ${tdp}W` : ""}
         </span>
       </div>
-
-      {(ramTotal > 0 || ram) && (
-        <div className="space-y-2 border-t border-border pt-3">
-          <div className="panel-title mb-2.5">
-            <MemoryIcon />
-            RAM
-          </div>
-          <MetricBar
-            label="Used"
-            value={ramUsed}
-            max={ramTotal}
-            caption={ramTotal > 0 ? `${formatMb(ramUsed)} / ${formatMb(ramTotal)} · ${ramPct}%` : "—"}
-          />
-          {ramAvail > 0 && (
-            <div className="flex justify-between text-xs">
-              <span className="text-muted">Available</span>
-              <span className="font-tabular text-text">{formatMb(ramAvail)}</span>
-            </div>
-          )}
-          {unifiedMemory?.oomRisk && unifiedMemory.oomRisk !== "low" && (
-            <div className="flex justify-between text-xs">
-              <span className="text-muted">OOM Risk</span>
-              <span
-                className={`font-tabular ${
-                  unifiedMemory.oomRisk === "high" ? "text-danger" : "text-warning"
-                }`}
-              >
-                {unifiedMemory.oomRisk}
-              </span>
-            </div>
-          )}
+      {model && (
+        <div className="sp-row sp-row--rule">
+          <span className="text-muted">Model</span>
+          <span className="mono sp-clip text-text" title={model}>
+            {model}
+            {cores != null ? ` · ${cores} cores` : ""}
+          </span>
         </div>
       )}
     </Panel>

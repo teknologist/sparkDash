@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { ComposerState, ModelSetupsState, SparkSnapshot, WsSnapshot } from "../api/types";
 import { ingestSnapshots } from "./metricsStore";
-import { OVERVIEW_ID } from "../constants";
+import { initialActiveId } from "../constants";
+import { fetchAuthStatus, getToken, onTokenChange, reportAuthRequired } from "../api/authToken";
 
-const WS_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const RECONNECT_DELAY = 2000;
+
+/** Built per connect so a token saved from the dialog is used on the next socket. */
+function wsUrl(): string {
+  const token = getToken();
+  return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+}
 
 /**
  * useSnapshot — connects to the WebSocket and exposes live spark data.
@@ -15,11 +21,35 @@ export function useSnapshot() {
   const [setupState, setSetupState] = useState<ModelSetupsState | null>(null);
   const [composerState, setComposerState] = useState<ComposerState | null>(null);
   const [connected, setConnected] = useState(false);
-  const [activeId, setActiveId] = useState<string | null>(OVERVIEW_ID);
+  const [lastValidSnapshotAt, setLastValidSnapshotAt] = useState<number | null>(null);
+  const [snapshotGeneratedAt, setSnapshotGeneratedAt] = useState<number | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [refreshInterval, setRefreshInterval] = useState<number | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(initialActiveId);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** When false, onclose must not schedule reconnect (unmount / intentional close). */
   const shouldReconnect = useRef(true);
+  /** Token value whose rejection we already checked, so a refused socket asks once, not every retry. */
+  const authCheckedFor = useRef<string | null>(null);
+
+  // A browser cannot see why an upgrade was refused — it just gets a close.
+  // When a socket dies before its first snapshot, ask the server whether the
+  // token is the reason, and if so let the app prompt for one.
+  const checkAuthAfterRefusal = useCallback(() => {
+    const token = getToken();
+    if (authCheckedFor.current === token) return;
+    authCheckedFor.current = token;
+    fetchAuthStatus(token)
+      .then((status) => {
+        if (!shouldReconnect.current || getToken() !== token) return;
+        if (status.tokenRequired && !status.authenticated) reportAuthRequired();
+      })
+      .catch(() => {
+        // Server unreachable (or restarting): check again on the next refusal.
+        authCheckedFor.current = null;
+      });
+  }, []);
 
   // ─── Connect ─────────────────────────────────────────────
   const connect = useCallback(() => {
@@ -29,44 +59,69 @@ export function useSnapshot() {
     // Avoid duplicate sockets while OPEN or still CONNECTING
     if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(wsUrl());
     wsRef.current = ws;
+    let receivedSnapshot = false;
 
     ws.onopen = () => {
-      setConnected(true);
+      // A socket alone is not healthy; wait for one valid snapshot.
+      setConnected(false);
       console.log("[ws] connected");
     };
 
     ws.onmessage = (ev) => {
       try {
         const msg: WsSnapshot = JSON.parse(ev.data);
-        if (msg.type === "snapshot") {
+        if (msg.type === "snapshot" && Array.isArray(msg.sparks)) {
+          const receivedAt = Date.now();
           // Feed the central history store (8b) before notifying React state.
-          ingestSnapshots(msg.sparks);
+          ingestSnapshots(msg.sparks, msg.generatedAt ?? receivedAt);
           setSparks(msg.sparks);
           if (msg.setup) setSetupState(msg.setup);
           if (msg.composer) setComposerState(msg.composer);
-          // Default to the Overview tab; keep the current selection if it
-          // is still valid (Overview is always valid).
-          setActiveId((prev) => {
-            if (prev === OVERVIEW_ID) return OVERVIEW_ID;
-            if (prev && msg.sparks.some((s) => s.id === prev)) return prev;
-            return OVERVIEW_ID;
-          });
+          setConnected(true);
+          receivedSnapshot = true;
+          authCheckedFor.current = null;
+          setLastValidSnapshotAt(receivedAt);
+          setSnapshotGeneratedAt(
+            Number.isFinite(msg.generatedAt) ? Number(msg.generatedAt) : null
+          );
+          setRefreshInterval(
+            Number.isFinite(msg.refreshInterval) ? Number(msg.refreshInterval) : null
+          );
+          setSnapshotError(null);
+        } else {
+          setSnapshotError("The server sent an invalid telemetry payload.");
         }
-      } catch {}
+      } catch {
+        setSnapshotError("The server sent malformed telemetry data.");
+      }
     };
 
     ws.onclose = () => {
       setConnected(false);
       wsRef.current = null;
       if (!shouldReconnect.current) return;
+      if (!receivedSnapshot) checkAuthAfterRefusal();
       reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY);
     };
 
     ws.onerror = () => {
       ws.close();
     };
+  }, [checkAuthAfterRefusal]);
+
+  /** Drop the current socket without scheduling the usual delayed reconnect. */
+  const disposeSocket = useCallback(() => {
+    clearTimeout(reconnectTimer.current);
+    const ws = wsRef.current;
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.close();
+    }
+    wsRef.current = null;
   }, []);
 
   // ─── Lifecycle ───────────────────────────────────────────
@@ -75,17 +130,19 @@ export function useSnapshot() {
     connect();
     return () => {
       shouldReconnect.current = false;
-      clearTimeout(reconnectTimer.current);
-      const ws = wsRef.current;
-      if (ws) {
-        ws.onclose = null;
-        ws.onerror = null;
-        ws.onmessage = null;
-        ws.close();
-      }
-      wsRef.current = null;
+      disposeSocket();
     };
-  }, [connect]);
+  }, [connect, disposeSocket]);
+
+  // A new (or cleared) token takes effect immediately: reconnect with it.
+  useEffect(
+    () =>
+      onTokenChange(() => {
+        disposeSocket();
+        connect();
+      }),
+    [connect, disposeSocket]
+  );
 
   // ─── Derived state ──────────────────────────────────────
   const activeSpark = sparks.find((s) => s.id === activeId) || null;
@@ -98,5 +155,9 @@ export function useSnapshot() {
     activeId,
     setActiveId,
     activeSpark,
+    lastValidSnapshotAt,
+    snapshotGeneratedAt,
+    snapshotError,
+    refreshInterval,
   };
 }

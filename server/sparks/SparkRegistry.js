@@ -1,8 +1,9 @@
 import fs from "fs";
 import { SPARKS_JSON_PATH, LLM_PORT } from "../config.js";
 import { loadSecrets, saveSecrets } from "../secretsStore.js";
-import { atomicWrite } from "../util/atomicWrite.js";
-import { isValidSparkId } from "../validate.js";
+import { atomicWrite, quarantineCorrupt } from "../util/atomicWrite.js";
+import { isValidSparkId, normalizeSshPort } from "../validate.js";
+import { llmProbeHost } from "../collectors/llmHost.js";
 
 /**
  * SparkRegistry — loads, persists, and emits change events for the Spark list.
@@ -73,9 +74,15 @@ export class SparkRegistry {
     }
     if (this.getSpark(config.id)) throw new Error(`Spark ${config.id} already exists`);
     const spark = this._normalizeConfig(config);
-    this._storePassword(spark.id, config?.ssh?.password);
-    this._sparks.push(spark);
-    this._save();
+    const nextSparks = [...this._sparks, spark];
+    this._save(nextSparks);
+    try {
+      this._storePassword(spark.id, config?.ssh?.password);
+    } catch (err) {
+      this._save(this._sparks);
+      throw err;
+    }
+    this._sparks = nextSparks;
     this._emit("add", this._withSecrets(spark));
     return this._withSecrets(spark);
   }
@@ -96,8 +103,10 @@ export class SparkRegistry {
     if (!/^([0-9a-f]{2}[:\-]){5}[0-9a-f]{2}$/.test(clean)) return null;
     const prev = this._sparks[idx];
     if (prev.detectedMacAddress === clean) return null;
-    this._sparks[idx] = this._normalizeConfig({ ...prev, detectedMacAddress: clean });
-    this._save();
+    const nextSparks = [...this._sparks];
+    nextSparks[idx] = this._normalizeConfig({ ...prev, detectedMacAddress: clean });
+    this._save(nextSparks);
+    this._sparks = nextSparks;
     this._emit("update", this._withSecrets(this._sparks[idx]));
     return this.toPublic(this._sparks[idx]);
   }
@@ -134,10 +143,13 @@ export class SparkRegistry {
 
     // Merge ssh carefully so we don't drop auth fields
     let mergedSsh = prev.ssh;
+    let passwordUpdate;
+    let hasPasswordUpdate = false;
     if (safeUpdates.ssh) {
       mergedSsh = { ...prev.ssh, ...safeUpdates.ssh };
       if (Object.prototype.hasOwnProperty.call(safeUpdates.ssh, "password")) {
-        this._storePassword(id, safeUpdates.ssh.password);
+        passwordUpdate = safeUpdates.ssh.password;
+        hasPasswordUpdate = true;
       }
       delete mergedSsh.password;
     }
@@ -148,8 +160,30 @@ export class SparkRegistry {
       id, // never overwrite id
       ssh: mergedSsh,
     };
-    this._sparks[idx] = this._normalizeConfig(updated);
-    this._save();
+    const nextSparks = [...this._sparks];
+    nextSparks[idx] = this._normalizeConfig(updated);
+    // Secrets belong to the host they were entered for. LLM keys also reach a
+    // remote unit's SSH host, through the bench tunnel.
+    const sshTarget = (s) => [s.isLocal, s.ssh.user, s.ssh.host || s.lanIp].join(" ");
+    const llmTarget = (s) => [llmProbeHost(s), !s.isLocal && (s.ssh.host || s.lanIp)].join(" ");
+    const prevPasswords = this._passwords;
+    const prevLlmApiKeys = this._llmApiKeys;
+    this._save(nextSparks);
+    try {
+      if (sshTarget(nextSparks[idx]) !== sshTarget(prev)) this._storePassword(id, "");
+      if (llmTarget(nextSparks[idx]) !== llmTarget(prev)) this.pruneLlmApiKeys(id, []);
+      if (hasPasswordUpdate) this._storePassword(id, passwordUpdate);
+    } catch (err) {
+      this._save(this._sparks);
+      // The unit is back on its old host, so its secrets come back too.
+      if (this._passwords !== prevPasswords || this._llmApiKeys !== prevLlmApiKeys) {
+        this._saveSecrets(prevPasswords, prevLlmApiKeys);
+        this._passwords = prevPasswords;
+        this._llmApiKeys = prevLlmApiKeys;
+      }
+      throw err;
+    }
+    this._sparks = nextSparks;
     this._emit("update", this._withSecrets(this._sparks[idx]));
     return this._withSecrets(this._sparks[idx]);
   }
@@ -158,18 +192,23 @@ export class SparkRegistry {
   removeSpark(id) {
     const idx = this._sparks.findIndex((s) => s.id === id);
     if (idx === -1) return null;
-    const removed = this._sparks.splice(idx, 1)[0];
-    let secretsChanged = false;
-    if (this._passwords.has(id)) {
-      this._passwords.delete(id);
-      secretsChanged = true;
+    const removed = this._sparks[idx];
+    const nextSparks = this._sparks.filter((s) => s.id !== id);
+    const nextPasswords = new Map(this._passwords);
+    const nextLlmApiKeys = new Map(this._llmApiKeys);
+    const passwordChanged = nextPasswords.delete(id);
+    const llmKeysChanged = nextLlmApiKeys.delete(id);
+    const secretsChanged = passwordChanged || llmKeysChanged;
+    this._save(nextSparks);
+    try {
+      if (secretsChanged) this._saveSecrets(nextPasswords, nextLlmApiKeys);
+    } catch (err) {
+      this._save(this._sparks);
+      throw err;
     }
-    if (this._llmApiKeys.has(id)) {
-      this._llmApiKeys.delete(id);
-      secretsChanged = true;
-    }
-    if (secretsChanged) this._persistSecrets();
-    this._save();
+    this._sparks = nextSparks;
+    this._passwords = nextPasswords;
+    this._llmApiKeys = nextLlmApiKeys;
     this._emit("remove", removed);
     return this.toPublic(removed);
   }
@@ -193,8 +232,8 @@ export class SparkRegistry {
     for (const s of this._sparks) {
       if (!seen.has(s.id)) next.push(s);
     }
+    this._save(next);
     this._sparks = next;
-    this._save();
     this._emit("reorder", null);
     return this.publicSparks;
   }
@@ -247,15 +286,50 @@ export class SparkRegistry {
         this._save();
       } else {
         console.error("[SparkRegistry] Failed to load sparks.json:", err.message);
+        if (err instanceof SyntaxError) quarantineCorrupt(SPARKS_JSON_PATH, "SparkRegistry", err);
         this._sparks = [];
+      }
+    }
+
+    // Out-of-band config edits (sparks.json edited directly without resyncing
+    // secrets) can rename llmPorts underneath stored API keys. Reconcile once
+    // here — before the registry is handed to anything — and never delete key
+    // material at load.
+    this._reconcileLlmApiKeysAtLoad();
+  }
+
+  /**
+   * Load-time LLM key/port reconcile.
+   * An out-of-band sparks.json edit that renames llmPorts (without going
+   * through PATCH / PUT llm-ports) leaves keys keyed on ports the spark no
+   * longer exposes. When exactly one keyed port is orphaned and exactly one
+   * configured port lacks a key, the rename shape is unambiguous → MOVE the
+   * key. Any other mismatch shape is warn-only: never prune, never delete
+   * stored key material at load.
+   */
+  _reconcileLlmApiKeysAtLoad() {
+    for (const spark of this._sparks) {
+      const configured = Array.isArray(spark.llmPorts) ? spark.llmPorts : [];
+      const keyed = this.llmApiKeyPorts(spark.id);
+      const orphans = keyed.filter((p) => !configured.includes(p));
+      const missing = configured.filter((p) => !this.hasLlmApiKey(spark.id, p));
+      if (orphans.length === 1 && missing.length === 1) {
+        this.moveLlmApiKey(spark.id, orphans[0], missing[0]);
+        console.warn(
+          `[SparkRegistry] migrated LLM API key for spark ${spark.id}: port ${orphans[0]} -> port ${missing[0]} after out-of-band config change`
+        );
+      } else if (orphans.length > 0 || missing.length > 0) {
+        console.warn(
+          `[SparkRegistry] spark ${spark.id} LLM key/port mismatch: keyed=<${orphans.join(", ")}> missing=<${missing.join(", ")}>`
+        );
       }
     }
   }
 
-  _save() {
+  _save(source = this._sparks) {
     try {
       // Never write passwords / API keys to sparks.json
-      const sparks = this._sparks.map((s) => {
+      const sparks = source.map((s) => {
         const ssh = { ...(s.ssh || {}) };
         delete ssh.password;
         delete ssh.hasPassword;
@@ -267,8 +341,10 @@ export class SparkRegistry {
       // truncate the registry and silently drop every Spark on next restart.
       // 0o644 keeps the registry readable so root/non-root container users share it.
       atomicWrite(SPARKS_JSON_PATH, JSON.stringify(data, null, 2) + "\n", 0o644);
-    } catch (err) {
-      console.error("[SparkRegistry] Failed to save sparks.json:", err.message);
+    } catch (cause) {
+      const err = new Error("Registry persistence failed", { cause });
+      err.status = 500;
+      throw err;
     }
   }
 
@@ -291,15 +367,18 @@ export class SparkRegistry {
    */
   _storePassword(id, password) {
     if (password == null) return;
+    const next = new Map(this._passwords);
     if (password === "") {
-      if (this._passwords.has(id)) {
-        this._passwords.delete(id);
-        this._persistSecrets();
+      if (next.has(id)) {
+        next.delete(id);
+        this._saveSecrets(next, this._llmApiKeys);
+        this._passwords = next;
       }
       return;
     }
-    this._passwords.set(id, String(password));
-    this._persistSecrets();
+    next.set(id, String(password));
+    this._saveSecrets(next, this._llmApiKeys);
+    this._passwords = next;
   }
 
   /** Public helper: set password without other config changes (e.g. from Test / Edit). */
@@ -325,6 +404,12 @@ export class SparkRegistry {
       .map((p) => parseInt(p, 10))
       .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535)
       .sort((a, b) => a - b);
+  }
+
+  /** The saved Bearer key for one LLM port (server-side use only; never returned by the API). */
+  getLlmApiKey(id, port) {
+    const key = this._llmApiKeys.get(id)?.[String(port)];
+    return key && String(key).trim() ? String(key) : null;
   }
 
   hasLlmApiKey(id, port) {
@@ -359,17 +444,20 @@ export class SparkRegistry {
     if (apiKey == null) return;
     const portKey = String(port);
     const existing = { ...(this._llmApiKeys.get(id) || {}) };
+    const nextKeys = new Map(this._llmApiKeys);
     if (apiKey === "") {
       if (!existing[portKey]) return;
       delete existing[portKey];
-      if (Object.keys(existing).length === 0) this._llmApiKeys.delete(id);
-      else this._llmApiKeys.set(id, existing);
-      this._persistSecrets();
+      if (Object.keys(existing).length === 0) nextKeys.delete(id);
+      else nextKeys.set(id, existing);
+      this._saveSecrets(this._passwords, nextKeys);
+      this._llmApiKeys = nextKeys;
       return;
     }
     existing[portKey] = String(apiKey).trim();
-    this._llmApiKeys.set(id, existing);
-    this._persistSecrets();
+    nextKeys.set(id, existing);
+    this._saveSecrets(this._passwords, nextKeys);
+    this._llmApiKeys = nextKeys;
   }
 
   /** Drop API key for a port (e.g. when the port is removed). */
@@ -399,8 +487,10 @@ export class SparkRegistry {
     if (!key) return;
     delete existing[String(from)];
     existing[String(to)] = key;
-    this._llmApiKeys.set(id, existing);
-    this._persistSecrets();
+    const nextKeys = new Map(this._llmApiKeys);
+    nextKeys.set(id, existing);
+    this._saveSecrets(this._passwords, nextKeys);
+    this._llmApiKeys = nextKeys;
   }
 
   /**
@@ -423,9 +513,11 @@ export class SparkRegistry {
       else changed = true;
     }
     if (!changed) return;
-    if (Object.keys(next).length === 0) this._llmApiKeys.delete(id);
-    else this._llmApiKeys.set(id, next);
-    this._persistSecrets();
+    const nextKeys = new Map(this._llmApiKeys);
+    if (Object.keys(next).length === 0) nextKeys.delete(id);
+    else nextKeys.set(id, next);
+    this._saveSecrets(this._passwords, nextKeys);
+    this._llmApiKeys = nextKeys;
   }
 
   /**
@@ -434,6 +526,35 @@ export class SparkRegistry {
    * @param {number[]} prevPorts
    * @param {number[]} nextPorts
    */
+  /**
+   * updateSpark() plus LLM API key reconcile for PATCH /api/sparks/:id.
+   *
+   * Armed whenever the patch carries an `llmPorts` own-property — including
+   * `[]` and the legacy single-value shape — because _normalizeLlmPorts()
+   * applies those too (empty/invalid -> [LLM_PORT], scalar -> [n]). The sync
+   * runs against the POST-normalize ports on the stored spark, so it sees the
+   * same rename the persisted record does, not the raw request body.
+   * @param {string} id
+   * @param {object} updates PATCH body
+   * @returns {{ spark: object, llmPortsSynced: boolean }}
+   */
+  patchSpark(id, updates) {
+    const body = updates || {};
+    const armed = Object.prototype.hasOwnProperty.call(body, "llmPorts");
+    let prevPorts = null;
+    if (armed) {
+      const existing = this.getSpark(id);
+      if (!existing) throw new Error(`Spark ${id} not found`);
+      prevPorts = Array.isArray(existing.llmPorts) ? [...existing.llmPorts] : [];
+    }
+    const updated = this.updateSpark(id, body);
+    const llmPortsSynced = armed && Array.isArray(updated.llmPorts);
+    if (llmPortsSynced) {
+      this.syncLlmApiKeysToPorts(id, prevPorts, updated.llmPorts);
+    }
+    return { spark: llmPortsSynced ? this.getSpark(id) : updated, llmPortsSynced };
+  }
+
   syncLlmApiKeysToPorts(id, prevPorts, nextPorts) {
     const prev = Array.isArray(prevPorts) ? prevPorts : [];
     const next = Array.isArray(nextPorts) ? nextPorts : [];
@@ -446,11 +567,16 @@ export class SparkRegistry {
   }
 
   _persistSecrets() {
+    this._saveSecrets(this._passwords, this._llmApiKeys);
+  }
+
+  _saveSecrets(passwords, llmApiKeys) {
     try {
-      saveSecrets(this._passwords, this._llmApiKeys);
-    } catch (err) {
-      console.error("[SparkRegistry] Failed to persist secrets:", err.message);
-      throw err; // surface to API so the UI can show it
+      saveSecrets(passwords, llmApiKeys);
+    } catch (cause) {
+      const err = new Error("Secrets persistence failed", { cause });
+      err.status = 500;
+      throw err;
     }
   }
 
@@ -473,6 +599,8 @@ export class SparkRegistry {
       host: sshIn.host || "",
       user: sshIn.user || "root",
       auth: sshIn.auth === "pass" ? "pass" : "key",
+      /** TCP port for SSH. Missing or invalid values fall back to 22. */
+      port: normalizeSshPort(sshIn.port) ?? 22,
     };
     const llmPorts = this._normalizeLlmPorts(config.llmPorts ?? config.llmPort);
     const role = this._normalizeRole(config);
@@ -481,7 +609,20 @@ export class SparkRegistry {
     return {
       id: config.id,
       name: config.name || config.id,
+      /** Unit type: spark (DGX Spark) or host (dedicated GPU Linux box). */
+      kind: config.kind === "host" ? "host" : "spark",
+      /**
+       * Optional OS platform override for SSH-collected units: "darwin" for
+       * macOS hosts (Mac Studio etc.). Absent/"linux" keeps the existing
+       * /proc-based collectors. See SystemCollector isMac.
+       */
+      platform: config.platform === "darwin" ? "darwin" : "linux",
       lanIp: config.lanIp || "",
+      /** Optional pinned HTTP target for LLM probes/actions; SSH still uses ssh.host. */
+      llmHost:
+        typeof config.llmHost === "string" && config.llmHost.trim()
+          ? config.llmHost.trim()
+          : null,
       cx7Ip: config.cx7Ip || null,
       /** Optional user override for Wake-on-LAN. Empty → use detectedMacAddress. */
       macAddress: config.macAddress || null,
@@ -505,10 +646,32 @@ export class SparkRegistry {
        */
       llmMonitoring:
         role === "worker" ? false : role === "head" ? true : config.llmMonitoring !== false,
+      /**
+       * Probe local ComfyUI and show the ComfyUI card (default false; all roles).
+       */
+      comfyMonitoring: Boolean(config.comfyMonitoring),
+      /** ComfyUI HTTP port (default 8188). */
+      comfyPort: this._normalizeComfyPort(config.comfyPort),
+      /**
+       * Opt-in tailnet presence via `tailscale status --json` (default false).
+       */
+      tailscaleMonitoring: Boolean(config.tailscaleMonitoring),
+      /**
+       * Opt-in: Hermes Agent CLI is installed on this machine. When enabled,
+       * the SparkMonitor checks for updates and allows one-click `hermes update`.
+       */
+      hermesMonitoring: Boolean(config.hermesMonitoring),
       disabledDevices: Array.isArray(config.disabledDevices) ? config.disabledDevices : [],
       disabledInterfaces: Array.isArray(config.disabledInterfaces) ? config.disabledInterfaces : [],
       storagePollDisabled: Boolean(config.storagePollDisabled),
     };
+  }
+
+  /** Normalize ComfyUI port to 1–65535 (default 8188). */
+  _normalizeComfyPort(value) {
+    const n = typeof value === "string" ? parseInt(value, 10) : Number(value);
+    if (Number.isInteger(n) && n >= 1 && n <= 65535) return n;
+    return 8188;
   }
 
   /** Normalize role; legacy workerNode=true → worker. */

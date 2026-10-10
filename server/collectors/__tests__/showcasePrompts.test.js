@@ -18,10 +18,18 @@ const managerSrc = readFileSync(
   "utf8"
 );
 const promptsSrc = readFileSync(
+  path.join(__dirname, "../../../src/shared/llmPrompts.js"),
+  "utf8"
+);
+const showcaseUiSrc = readFileSync(
   path.join(
     __dirname,
     "../../../src/components/ShowcasePage/showcasePrompts.ts"
   ),
+  "utf8"
+);
+const benchSrc = readFileSync(
+  path.join(__dirname, "../DecodeBench.js"),
   "utf8"
 );
 
@@ -78,6 +86,23 @@ test("catalog prompts exist for text, structural, and mixed pickers", () => {
   assert.match(promptsSrc, /export const TEXT_PROMPTS/);
   assert.match(promptsSrc, /export const STRUCTURAL_PROMPTS/);
   assert.match(promptsSrc, /export function pickShowcasePrompts/);
+  assert.match(showcaseUiSrc, /from \"\.\.\/\.\.\/shared\/llmPrompts\.js\"/);
   const textCount = (promptsSrc.match(/TEXT_PROMPTS/g) || []).length;
   assert.ok(textCount >= 2);
+});
+
+test("DecodeBench uses the lab structured protocol at temperature 0, thinking off", () => {
+  // 1.8.3 moved DecodeBench off the Showcase structural catalog + fill-to-max
+  // and onto the lab structured protocol (count 1 -> 200); 1.8.4 added the
+  // output-type picker. These assertions still referenced the removed API.
+  assert.match(benchSrc, /pickDecodeBenchPrompts\(/);
+  assert.match(benchSrc, /decodeBenchPromptForType\(/);
+  assert.match(benchSrc, /normalizeDecodeBenchType\(/);
+  assert.match(benchSrc, /temperature:\s*0/);
+  assert.match(benchSrc, /top_p:\s*1/);
+  assert.match(benchSrc, /applyThinkingFlags\(body,\s*modelId,\s*false\)/);
+  assert.match(benchSrc, /min_tokens:\s*maxTokens/);
+  assert.doesNotMatch(benchSrc, /withFillToMaxInstruction/);
+  assert.doesNotMatch(benchSrc, /uniquePrefillPrefix/);
+  assert.doesNotMatch(benchSrc, /BENCH_PROMPTS/);
 });

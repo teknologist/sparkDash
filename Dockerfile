@@ -3,7 +3,11 @@
 # Dockerfile for arm64 (DGX Spark GB10 platform)
 # ============================================================
 
-FROM node:22-bookworm-slim AS builder
+# library/node via public.ecr.aws — Docker Hub (docker.io) often resolves
+# to IPv6; Sparks with no IPv6 route fail auth.docker.io with
+# "network is unreachable". ECR public is the same official image, IPv4-first.
+ARG NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim
+FROM ${NODE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -18,7 +22,11 @@ COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund \
   || (echo "npm ci failed once — retrying…" && npm cache clean --force && npm ci --no-audit --no-fund)
 
-# Copy source and build
+# Copy source and build. VITE_HISTORY_HOURS sets the frontend metrics-history
+# retention window (see src/hooks/metricsStore.ts); override via
+# `docker compose build --build-arg VITE_HISTORY_HOURS=4` or the env in compose.
+ARG VITE_HISTORY_HOURS=8
+ENV VITE_HISTORY_HOURS=${VITE_HISTORY_HOURS}
 COPY . .
 RUN npm run build
 
@@ -31,7 +39,7 @@ RUN npm prune --omit=dev --no-audit --no-fund \
 # ============================================================
 # Production image — lean runtime
 # ============================================================
-FROM node:22-bookworm-slim
+FROM ${NODE_IMAGE}
 
 # SSH client + sshpass for remote Sparks; util-linux provides nsenter for host GPU/net
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -42,10 +50,14 @@ WORKDIR /app
 
 # Copy built frontend, pruned deps, and server
 COPY --from=builder /app/dist ./dist
+# Second copy: compose bind-mounts ./dist over the one above, and an unbuilt host dir would hide it.
+COPY --from=builder /app/dist ./dist-baked
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
 COPY --from=builder /app/server ./server
+COPY --from=builder /app/src/shared ./src/shared
+COPY --from=builder /app/src/components/ShowcasePage/showcasePrompts.ts ./src/components/ShowcasePage/showcasePrompts.ts
 COPY --from=builder /app/config ./config
 
 # Volume for persistent sparks.json
