@@ -14,6 +14,9 @@
  */
 import { allocateNode } from "./nodeAlloc.js";
 
+/** Modalities llama-swap's capabilities.in/out accept. */
+const LLAMA_SWAP_MODALITIES = new Set(["text", "audio", "image"]);
+
 export function generateLlamaSwapConfig(catalog, assignment) {
   // Per-model gpu-util. Apply used to inject this as env at spawn time, but when
   // llama-swap starts a model on demand there is no Apply in the loop — so the
@@ -167,8 +170,12 @@ export function generateLlamaSwapConfig(catalog, assignment) {
     const m = b.model;
     if (m.displayName) lines.push(`    name: "${yamlStr(m.displayName)}"`);
     if (m.description) lines.push(`    description: "${yamlStr(m.description)}"`);
-    const ins = Array.isArray(m.inputs) && m.inputs.length ? m.inputs : ["text"];
-    const outs = Array.isArray(m.outputs) && m.outputs.length ? m.outputs : ["text"];
+    // llama-swap rejects the WHOLE file on an unknown modality ("video" for the
+    // Qwen3.8 bricks), keeping its old config, so a new model never became
+    // loadable. Advertise only what it accepts; the catalog keeps the truth.
+    const known = (xs) => (Array.isArray(xs) ? xs : []).filter((x) => LLAMA_SWAP_MODALITIES.has(x));
+    const ins = known(m.inputs).length ? known(m.inputs) : ["text"];
+    const outs = known(m.outputs).length ? known(m.outputs) : ["text"];
     lines.push("    capabilities:");
     lines.push(`      in: [${ins.join(", ")}]`);
     lines.push(`      out: [${outs.join(", ")}]`);

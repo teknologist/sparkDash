@@ -1824,6 +1824,9 @@ export class SystemCollector {
    * Host PID 1 namespaces live under /host/proc/1/ns/*.
    */
   _hasHostProc() {
+    // HOST_PROC_PATH=/proc means we already run on the host (systemd install):
+    // there is no host namespace to enter, and nsenter would need root.
+    if (path.resolve(HOST_PATHS.PROC) === "/proc") return false;
     return fs.existsSync(path.join(HOST_PATHS.PROC, "1", "ns", "mnt"));
   }
 

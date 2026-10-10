@@ -336,3 +336,18 @@ test("a serving model whose probe blips is not recorded as a days-long load", as
   await mgr._detect(); // back
   assert.deepEqual(mgr.stats.loads("glm"), []);
 });
+
+// llama-swap refused the whole config over `in: [text, image, video]`
+// ("invalid modality"), kept its old file, and the new Qwen3.8 models were
+// never loadable through the gateway.
+test("the gateway config only advertises modalities llama-swap accepts", () => {
+  const brick = {
+    id: "q", displayName: "Q", placement: "single", nodes: ["spark1"], weightGB: 10, port: 8007, servedModel: "Q",
+    inputs: ["text", "image", "video"], outputs: ["text"],
+    launch: { spark1: { target: "local", start: { cmd: "/x/start.sh" }, stop: { cmd: "/x/stop.sh" }, ready: { host: "127.0.0.1", port: 8007, servedModel: "Q" } } },
+  };
+  const catalog = { models: [brick], nodeBudgetGB: () => 113, nodeCapacityGB: () => 121, getModel: () => brick };
+  const yaml = generateLlamaSwapConfig(catalog, { spark1: ["q"] });
+  assert.match(yaml, /in: \[text, image\]/);
+  assert.doesNotMatch(yaml, /video/);
+});
