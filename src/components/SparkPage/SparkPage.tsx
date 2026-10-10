@@ -55,6 +55,7 @@ export function SparkPage({
     spark.disabledInterfaces || []
   );
   const [llmPorts, setLlmPorts] = useState<number[]>(spark.llmPorts ?? [spark.llmPort ?? 8888]);
+  const [showIdlePorts, setShowIdlePorts] = useState(false);
   const [storagePollDisabled, setStoragePollDisabled] = useState<boolean>(
     spark.storagePollDisabled ?? false
   );
@@ -133,8 +134,20 @@ export function SparkPage({
   // Models you start/stop with your own start.sh / stop.sh. Shown on every Spark and in every tab,
   // so it is always easy to find (a worker may have its own scripts too).
   const modelsPanel = <LlmModelsPanel spark={spark} />;
-  const primaryPort = llmPorts[0];
-  const extraPorts = llmPorts.slice(1);
+  // A Spark can monitor many ports (one per co-resident model); a full panel for
+  // each idle one buried the page. Show serving ports, hide idle ones behind a
+  // toggle, and keep the first port's panel when nothing serves so the LLM
+  // section (and its settings) never disappears.
+  const servingPorts = llmPorts.filter((_, i) => metrics.llm?.[i]?.available);
+  const idlePorts = llmPorts.filter((p) => !servingPorts.includes(p));
+  const shownPorts = showIdlePorts
+    ? llmPorts
+    : servingPorts.length > 0
+      ? servingPorts
+      : llmPorts.slice(0, 1);
+  const hiddenPorts = llmPorts.filter((p) => !shownPorts.includes(p));
+  const primaryPort = shownPorts[0];
+  const extraPorts = shownPorts.slice(1);
   const unified = metrics.unifiedMemory;
   const showUnified = spark.kind !== "host" && unified != null && unified.total > 0;
 
@@ -255,7 +268,7 @@ export function SparkPage({
           </div>
           <div className="sp-col">
             {view === "all" && showSvc && llmOn && primaryPort != null && (
-              <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
+              <Item order={3}>{renderLlmPanel(primaryPort, llmPorts.indexOf(primaryPort))}</Item>
             )}
             {view === "all" && showSvc && comfyPanel && <Item order={4}>{comfyPanel}</Item>}
             {view === "all" &&
@@ -263,9 +276,23 @@ export function SparkPage({
               llmOn &&
               extraPorts.map((port, j) => (
                 <Item key={port} order={10 + j}>
-                  {renderLlmPanel(port, j + 1)}
+                  {renderLlmPanel(port, llmPorts.indexOf(port))}
                 </Item>
               ))}
+            {view === "all" && showSvc && llmOn && (hiddenPorts.length > 0 || (showIdlePorts && idlePorts.length > 0)) && (
+              <Item order={29}>
+                <button
+                  type="button"
+                  className="btn btn--sm w-full justify-center text-muted"
+                  onClick={() => setShowIdlePorts((v) => !v)}
+                  title={showIdlePorts ? "Hide ports with no model serving" : `Idle: ${hiddenPorts.map((p) => `:${p}`).join(", ")}`}
+                >
+                  {showIdlePorts
+                    ? `Hide ${idlePorts.length} idle LLM port${idlePorts.length === 1 ? "" : "s"}`
+                    : `${hiddenPorts.length} idle LLM port${hiddenPorts.length === 1 ? "" : "s"} hidden · Show`}
+                </button>
+              </Item>
+            )}
             {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
             <Item order={7}>
               <StoragePanel
