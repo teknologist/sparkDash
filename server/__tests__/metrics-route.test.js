@@ -34,6 +34,13 @@ test("GET /metrics answers 404 while off and Prometheus text once enabled", asyn
       PORT: String(port),
       SPARKDASH_TOKEN: "",
       SPARKS_JSON_PATH: sparksPath,
+      // Keep the model composer off the real catalog, state files and gateway:
+      // a spawned server otherwise probes live models and writes to config/.
+      MODELS_PATH: path.join(tmp, "models.json"),
+      MODEL_SETUPS_PATH: path.join(tmp, "model-setups.json"),
+      COMPOSITIONS_PATH: path.join(tmp, "compositions.json"),
+      LLAMA_SWAP_CONFIG_PATH: path.join(tmp, "llama-swap.yaml"),
+      LLAMA_SWAP_URL: "http://127.0.0.1:1",
       SETTINGS_JSON_PATH: path.join(tmp, "settings.json"),
       SPARKS_SECRETS_PATH: path.join(tmp, "sparks-secrets.json"),
       SECRETS_KEY_PATH: path.join(tmp, ".secrets-key"),

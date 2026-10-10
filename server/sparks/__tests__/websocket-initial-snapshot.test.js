@@ -56,6 +56,8 @@ test("a new WebSocket client receives its initial snapshot without rebroadcastin
       MODELS_PATH: path.join(tmp, "models.json"),
       MODEL_SETUPS_PATH: path.join(tmp, "model-setups.json"),
       COMPOSITIONS_PATH: path.join(tmp, "compositions.json"),
+      LLAMA_SWAP_CONFIG_PATH: path.join(tmp, "llama-swap.yaml"),
+      LLAMA_SWAP_URL: "http://127.0.0.1:1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

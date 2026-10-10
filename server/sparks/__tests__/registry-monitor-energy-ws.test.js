@@ -27,6 +27,13 @@ async function startServer(t) {
       BIND_HOST: "127.0.0.1",
       PORT: String(port),
       SPARKS_JSON_PATH: path.join(tmp, "sparks.json"),
+      // Keep the model composer off the real catalog, state files and gateway:
+      // a spawned server otherwise probes live models and writes to config/.
+      MODELS_PATH: path.join(tmp, "models.json"),
+      MODEL_SETUPS_PATH: path.join(tmp, "model-setups.json"),
+      COMPOSITIONS_PATH: path.join(tmp, "compositions.json"),
+      LLAMA_SWAP_CONFIG_PATH: path.join(tmp, "llama-swap.yaml"),
+      LLAMA_SWAP_URL: "http://127.0.0.1:1",
       SPARKS_SECRETS_PATH: path.join(tmp, "sparks-secrets.json"),
       SECRETS_KEY_PATH: path.join(tmp, ".secrets-key"),
       LLM_DAILY_JSON_PATH: path.join(tmp, "llm-daily.json"),
