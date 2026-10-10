@@ -31,6 +31,12 @@ const COMPOSITIONS_PATH =
 const LLAMA_SWAP_CONFIG_PATH =
   process.env.LLAMA_SWAP_CONFIG_PATH || "/home/eric/llama-swap/config.yaml";
 /**
+ * Base URL of the llama-swap gateway. The composer DRIVES llama-swap rather than
+ * starting models itself: llama-swap only tracks models it started, so a direct
+ * start leaves it believing nothing is loaded and its eviction logic cannot fire.
+ */
+const LLAMA_SWAP_URL = process.env.LLAMA_SWAP_URL || "http://127.0.0.1:9090";
+/**
  * Per-node unified-memory reserve (GB) kept free of model budget (load headroom).
  * Calibrated against the measured whole-node case: ds4-entrpi at ctx 200k really
  * occupies ~112 GiB of the GB10's 121.69 GiB usable and serves fine, i.e. ~8 GiB
@@ -104,6 +110,7 @@ export {
   MODELS_PATH,
   COMPOSITIONS_PATH,
   LLAMA_SWAP_CONFIG_PATH,
+  LLAMA_SWAP_URL,
   NODE_RAM_RESERVE_GB,
   LLM_PROBE_TIMEOUT_MS,
   SSH_CONNECT_TIMEOUT,

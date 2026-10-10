@@ -43,7 +43,7 @@
     {
       "id": "glm-5.3-flash-exl3",
       "name": "GLM-5.3 Flash EXL3 (dual)",
-      "description": "GLM-5.3-Flash EXL3/TR3 4bpw · spark1 head + spark2 worker (TP=2 over CX7, DFlash2 spec-decode, 1M ctx)",
+      "description": "GLM-5.3-Flash EXL3/TR3 4bpw · spark1 head + spark2 worker (TP=2 over CX7, DFlash2 spec-decode, 850k ctx)",
       "sparks": ["spark1", "spark2"],
       "startParallel": false,
       "detect": { "localContainers": ["glm53-exl3-head"] },

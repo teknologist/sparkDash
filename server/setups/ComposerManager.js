@@ -3,7 +3,7 @@ import { spawn, execFile } from "child_process";
 import { ModelCatalog } from "./ModelCatalog.js";
 import { generateLlamaSwapConfig } from "./llamaSwapGen.js";
 import { allocateNode } from "./nodeAlloc.js";
-import { COMPOSITIONS_PATH, LLAMA_SWAP_CONFIG_PATH } from "../config.js";
+import { COMPOSITIONS_PATH, LLAMA_SWAP_CONFIG_PATH, LLAMA_SWAP_URL } from "../config.js";
 
 const DETECT_INTERVAL_MS = 5000;
 const READY_TIMEOUT_MS = 180000;
@@ -339,12 +339,21 @@ export class ComposerManager {
       }
     }
 
-    // (3) Merge — one entry per model; a serving endpoint wins over a loading one.
+    // (3) Merge — one entry per model PER NODE; a serving endpoint wins over a
+    // loading one. Keyed by id@node rather than id alone: a small brick can
+    // legitimately serve on both nodes at once (jeff is 3 GB, so it is run on
+    // each node rather than swapped between them), and collapsing those to one
+    // entry hid the second instance and under-reported that node's RAM. Dual
+    // bricks must still yield a single entry: step (1) probes them once per
+    // node they occupy (all hitting the head's endpoint), so they dedupe by id,
+    // and getState() expands them across the nodes they occupy.
     const seen = new Set();
     const running = [];
     for (const r of [...readyFound, ...loadingFound]) {
-      if (seen.has(r.id)) continue;
-      seen.add(r.id);
+      const key =
+        this.catalog.getModel(r.id)?.placement === "dual" ? r.id : `${r.id}@${r.node}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       running.push(r);
     }
     const changed = JSON.stringify(running) !== JSON.stringify(this._running);
@@ -382,12 +391,20 @@ export class ComposerManager {
   async _probeReady(ready) {
     const host = ready.host || "127.0.0.1";
     try {
-      const res = await fetch(`http://${host}:${ready.port}/v1/models`, {
+      // Most bricks are OpenAI-shaped: GET /v1/models -> {data:[{id}]}. A brick
+      // whose /v1/models is auth-gated or differently shaped (jeff: bearer-only,
+      // {models:[{name}]}) declares `endpoint` + `match` to be probed elsewhere —
+      // `match: "model"` reads the single id from a health payload's `model`.
+      const endpoint = ready.endpoint || "/v1/models";
+      const res = await fetch(`http://${host}:${ready.port}${endpoint}`, {
         signal: AbortSignal.timeout(3500),
       });
       if (!res.ok) return false;
       const data = await res.json().catch(() => null);
-      const ids = (data?.data || []).map((m) => String(m.id).toLowerCase());
+      const ids =
+        ready.match === "model"
+          ? (data?.model ? [String(data.model).toLowerCase()] : [])
+          : (data?.data || []).map((m) => String(m.id).toLowerCase());
       const want = String(ready.servedModel || "").toLowerCase();
       // EXACT match — substring matching false-positives across bricks that
       // share a prefix (e.g. "deepseek-v4-flash" ⊂ "deepseek-v4-flash-0731"),
@@ -473,52 +490,69 @@ export class ComposerManager {
         this._saveLaunchedUtil();
       }
 
-      // Start desired bricks not already serving on their target node, plus the
-      // ones we just stopped for resizing.
-      const toStart = desired.filter(
-        (u) => !runningKey.has(`${u.id}@${u.node}`) || relaunchKey.has(`${u.id}@${u.node}`)
-      );
-      // Start SEQUENTIALLY within a node, in parallel ACROSS nodes.
+      // ─── Converge via llama-swap ────────────────────────────────────────
       //
-      // vLLM sizes its KV cache from a one-shot memory profile at init. Two
-      // engines profiling the same GPU at once each see the other's allocation
-      // mid-flight, so the later one can conclude there is nothing left and die
-      // with "No available memory for the cache blocks" — even when the plan
-      // fits. Waiting for each model to finish coming up before starting its
-      // node-mate makes every profile see a settled device.
-      const startsByNode = new Map();
-      for (const u of toStart) {
-        if (!startsByNode.has(u.node)) startsByNode.set(u.node, []);
-        startsByNode.get(u.node).push(u);
-      }
-      const startOne = async (u) => {
-        const dynEnv = u.util != null ? { GPU_UTIL: u.util.toFixed(3) } : {};
-        this._appendLog(
-          `Starting ${u.id} on ${u.node}${u.util != null ? ` (gpu-util ${u.util.toFixed(2)})` : ""}…`
-        );
-        // Remember what we launched with so a later apply can tell whether the
-        // live reservation still matches the plan (see needsRelaunch above).
-        this._launchedUtil[`${u.id}@${u.node}`] = u.util != null ? u.util : null;
-        this._saveLaunchedUtil();
-        await this._runAction(u.id, u.node, u.spec, "start", dynEnv);
-        await this._waitReady([u]); // settle before this node's next model
-      };
-      await Promise.all(
-        [...startsByNode.values()].map(async (units) => {
-          for (const u of units) {
-            if (this._cancelled) break;
-            await startOne(u);
-          }
-        })
-      );
+      // The gateway OWNS model lifecycle; the composer plans. llama-swap only
+      // tracks models it started itself, so starting them here directly left it
+      // believing nothing was loaded (observed: both models reported "unloaded"
+      // while 101 GiB was held) and its eviction could never fire. Apply now
+      // writes the config, then asks the gateway to load the desired set.
+      // A brick with `gateway:false` is not an OpenAI chat backend (jeff answers
+      // /v1/systemone only), so llama-swap can neither load nor proxy it. Those
+      // are started directly here and kept out of the gateway's desired set.
+      const directUnits = desired.filter((u) => u.model.gateway === false);
+      const desiredNames = desired
+        .filter((u) => u.model.gateway !== false)
+        .map((u) => u.spec.ready?.servedModel || u.model.servedModel || u.id);
 
-      // Regenerate + write the llama-swap gateway (hot-reloads via -watch-config).
+      for (const u of directUnits) {
+        if (this._cancelled) break;
+        // Already serving: the alreadyKept loop above has logged "Keeping …"
+        // for it, so stay silent here rather than logging the same line twice.
+        if (await this._probeReady(u.spec.ready)) continue;
+        this._appendLog(`Starting ${u.id} on ${u.node} directly (not a gateway model)…`);
+        try {
+          await this._runAction(u.id, u.node, u.spec, "start");
+          this._appendLog(`[ready] ${u.id} started on ${u.node}`);
+        } catch (e) {
+          this._appendLog(`[warn] start ${u.id} on ${u.node}: ${e.message}`);
+        }
+      }
+
+      // 1. Config first: it defines placement, the per-model GPU_UTIL and the
+      //    exclusivity groups llama-swap needs before it can load anything.
       try {
         const yaml = generateLlamaSwapConfig(this.catalog, assignment);
         fs.writeFileSync(LLAMA_SWAP_CONFIG_PATH, yaml);
         this._appendLog(`Regenerated llama-swap config → ${LLAMA_SWAP_CONFIG_PATH}`);
+        await sleep(3000); // let -watch-config pick it up
       } catch (e) {
         this._appendLog(`[warn] llama-swap regen failed: ${e.message}`);
+      }
+
+      // 2. Evict anything loaded that the new assignment does not want. There is
+      //    no per-model unload endpoint, so this is all-or-nothing; skip it
+      //    entirely when the loaded set is already a subset of the desired one.
+      const loaded = await this._gatewayRunning();
+      const stale = loaded.filter((m) => !desiredNames.includes(m));
+      if (stale.length) {
+        this._appendLog(`Unloading via gateway (not in assignment): ${stale.join(", ")}`);
+        await this._gatewayUnloadAll();
+      }
+
+      // 3. Load the desired set, one at a time. Concurrent loads would race
+      //    vLLM's one-shot memory profile, and deploy/memcheck.sh already
+      //    serialises on free memory.
+      for (const name of desiredNames) {
+        if (this._cancelled) break;
+        const already = await this._gatewayRunning();
+        if (already.includes(name)) {
+          this._appendLog(`Keeping ${name} (already loaded in the gateway)`);
+          continue;
+        }
+        this._appendLog(`Asking gateway to load ${name}…`);
+        const ok = await this._gatewayLoad(name);
+        this._appendLog(ok ? `[ready] ${name} loaded` : `[warn] gateway could not load ${name}`);
       }
 
       this._currentAssignment = assignment;
@@ -550,27 +584,94 @@ export class ComposerManager {
     const added = new Set();
     // Per-node dynamic allocation gives each elastic (vLLM) model the GPU
     // utilization it should launch with, given its co-residents on that node.
+    // Keyed per NODE: the same brick co-residing on both nodes has different
+    // co-residents on each, so it gets a different util on each.
     const utilByModel = {};
     for (const node of Object.keys(assignment)) {
       const alloc = allocateNode(this.catalog, node, assignment[node] || []);
       for (const [id, info] of Object.entries(alloc.perModel || {})) {
-        if (info.util != null) utilByModel[id] = info.util;
+        if (info.util != null) utilByModel[`${id}@${node}`] = info.util;
       }
     }
     for (const node of Object.keys(assignment)) {
       for (const id of assignment[node] || []) {
-        if (added.has(id)) continue;
         const model = this.catalog.getModel(id);
         if (!model) continue;
         const launchNode =
           model.placement === "dual" ? Object.keys(model.launch || {})[0] : node;
+        // A DUAL brick is listed on every node it occupies but launches ONCE
+        // from its head node, so it dedupes by id. A single-placement brick is
+        // per-node: a small one (jeff, 3 GB) can legitimately serve on both
+        // nodes at once, and collapsing those to one unit made apply() stop the
+        // second instance as "running but not desired".
+        const key = model.placement === "dual" ? id : `${id}@${launchNode}`;
+        if (added.has(key)) continue;
         const spec = model.launch?.[launchNode];
         if (!spec) continue;
-        added.add(id);
-        units.push({ id, node: launchNode, model, spec, util: utilByModel[id] });
+        added.add(key);
+        units.push({ id, node: launchNode, model, spec, util: utilByModel[`${id}@${launchNode}`] });
       }
     }
     return units;
+  }
+
+
+  // ─── llama-swap gateway (it owns model lifecycle) ─────────
+  /** Served-model names llama-swap currently has loaded (or starting). */
+  async _gatewayRunning() {
+    try {
+      const res = await fetch(`${LLAMA_SWAP_URL}/running`, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return [];
+      const d = await res.json().catch(() => null);
+      return (d?.running || []).map((r) => r.model).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Unload everything. llama-swap exposes no per-model unload, only GET /unload. */
+  async _gatewayUnloadAll() {
+    try {
+      await fetch(`${LLAMA_SWAP_URL}/unload`, { signal: AbortSignal.timeout(120000) });
+      // Give the backends time to actually release; deploy/memcheck.sh waits too,
+      // but returning early here would race the next load's profile.
+      await sleep(5000);
+      return true;
+    } catch (e) {
+      this._appendLog(`[warn] gateway unload failed: ${e.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Load a model by asking the gateway for one token. This is the only way to
+   * make llama-swap start a model AND record it as loaded — which is what makes
+   * its eviction work later. Cold starts are minutes, hence the long timeout.
+   */
+  async _gatewayLoad(servedModel, timeoutMs = 1500000) {
+    try {
+      const res = await fetch(`${LLAMA_SWAP_URL}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: servedModel,
+          messages: [{ role: "user", content: "ok" }],
+          max_tokens: 1,
+          temperature: 0,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        this._appendLog(`[warn] ${servedModel}: gateway returned ${res.status} ${t.slice(0, 160)}`);
+        return false;
+      }
+      await res.json().catch(() => null);
+      return true;
+    } catch (e) {
+      this._appendLog(`[warn] ${servedModel}: ${e.message}`);
+      return false;
+    }
   }
 
   // ─── Runner (local + ssh), modeled on SetupManager._runComponent ─────────

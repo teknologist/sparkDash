@@ -12,22 +12,48 @@
  * @param {Record<string,string[]>} assignment  { nodeId: [modelId,...] }
  * @returns {string} YAML
  */
+import { allocateNode } from "./nodeAlloc.js";
+
 export function generateLlamaSwapConfig(catalog, assignment) {
-  // Collect unique bricks (dual models appear once, launched on their head node).
-  const bricks = [];
-  const seen = new Set();
+  // Per-model gpu-util. Apply used to inject this as env at spawn time, but when
+  // llama-swap starts a model on demand there is no Apply in the loop — so the
+  // value has to live in the generated command. Assigned models get the
+  // allocator's co-residence-aware util; an unassigned model loaded cold gets
+  // its own ceiling, since nothing else is on the node.
+  const utilByModel = {};
   for (const node of Object.keys(assignment || {})) {
-    for (const id of assignment[node] || []) {
-      if (seen.has(id)) continue;
-      const model = catalog.getModel(id);
-      if (!model) continue;
-      const launchNode = model.placement === "dual" ? Object.keys(model.launch || {})[0] : node;
-      const spec = model.launch?.[launchNode];
-      const ready = spec?.ready;
-      if (!spec || !ready) continue;
-      seen.add(id);
-      bricks.push({ model, node, launchNode, spec, ready });
+    const alloc = allocateNode(catalog, node, assignment[node] || []);
+    for (const [id, info] of Object.entries(alloc.perModel || {})) {
+      if (info.util != null) utilByModel[id] = info.util;
     }
+  }
+  // EVERY catalog brick gets an entry, not just the assigned ones: the gateway is
+  // the on-demand front door (LM Studio / Ollama style), so a client must be able
+  // to ask for any model and have llama-swap load it. The assignment no longer
+  // decides visibility — it only decides WHERE a model that can run on either
+  // node is routed. Unassigned models simply start cold on first request.
+  const placedOn = {};
+  for (const node of Object.keys(assignment || {})) {
+    for (const id of assignment[node] || []) if (!placedOn[id]) placedOn[id] = node;
+  }
+  const bricks = [];
+  for (const model of catalog.models) {
+    const eligible = Array.isArray(model.nodes) ? model.nodes : Object.keys(model.launch || {});
+    // dual bricks always launch from their head node; others honour the
+    // assignment when present, else fall back to their first eligible node.
+    const launchNode =
+      model.placement === "dual"
+        ? Object.keys(model.launch || {})[0]
+        : placedOn[model.id] || eligible[0];
+    const spec = model.launch?.[launchNode];
+    const ready = spec?.ready;
+    if (!spec || !ready) continue;
+    // `gateway:false` bricks are not OpenAI chat backends (jeff serves
+    // /v1/systemone only), so llama-swap could neither health-check nor proxy
+    // them; advertising one would hand clients a model that 404s. The composer
+    // starts them directly instead — see ComposerManager's directUnits.
+    if (model.gateway === false) continue;
+    bricks.push({ model, node: launchNode, launchNode, spec, ready });
   }
 
   const shArgs = (a) => (Array.isArray(a) ? a : []).join(" ").trim();
@@ -41,12 +67,14 @@ export function generateLlamaSwapConfig(catalog, assignment) {
       : "";
 
   // A remote command string for the given launch node (ssh via the node's host).
-  const remote = (spec, actionSpec) => {
-    const parts = [envPrefix(spec.env), actionSpec.cmd, shArgs(actionSpec.args)].filter(Boolean);
+  const withUtil = (env, util) =>
+    util != null ? { ...(env || {}), GPU_UTIL: Number(util).toFixed(3) } : env;
+  const remote = (spec, actionSpec, util) => {
+    const parts = [envPrefix(withUtil(spec.env, util)), actionSpec.cmd, shArgs(actionSpec.args)].filter(Boolean);
     return `\${ssh2} "${parts.join(" ")}"`;
   };
-  const local = (spec, actionSpec) => {
-    const parts = [envPrefix(spec.env), actionSpec.cmd, shArgs(actionSpec.args)].filter(Boolean);
+  const local = (spec, actionSpec, util) => {
+    const parts = [envPrefix(withUtil(spec.env, util)), actionSpec.cmd, shArgs(actionSpec.args)].filter(Boolean);
     return parts.join(" ");
   };
 
@@ -62,8 +90,8 @@ export function generateLlamaSwapConfig(catalog, assignment) {
   lines.push("");
   lines.push("models:");
 
-  const spark1Members = [];
-  const spark2Members = [];
+  const exclusiveMembers = [];   // whole-node models (dual / node-hogging)
+  const sharedMembers = [];      // models that can co-reside
 
   for (const b of bricks) {
     const served = b.ready.servedModel || b.model.servedModel || b.model.id;
@@ -72,23 +100,50 @@ export function generateLlamaSwapConfig(catalog, assignment) {
     const base = `http://${host}:${port}`;
     const guard = `curl -fsS --max-time 4 ${base}/v1/models 2>/dev/null | grep -qF ${served}`;
     const keeper = `while curl -fsS --max-time 5 ${base}/v1/models >/dev/null 2>&1; do sleep 15; done`;
+    const util =
+      utilByModel[b.model.id] != null
+        ? utilByModel[b.model.id]
+        : Number(b.model.maxUtil) > 0
+          ? Number(b.model.maxUtil)
+          : null;
     const startCmd =
-      b.spec.target === "ssh" ? remote(b.spec, b.spec.start) : local(b.spec, b.spec.start);
+      b.spec.target === "ssh" ? remote(b.spec, b.spec.start, util) : local(b.spec, b.spec.start, util);
     const stopCmd =
       b.spec.target === "ssh" ? remote(b.spec, b.spec.stop) : local(b.spec, b.spec.stop);
 
+    // Free-memory guard. llama-swap models exclusivity, not capacity: within a
+    // co-resident group it will start a model the node cannot hold, vLLM then
+    // dies at engine init and the container crash-loops. deploy/memcheck.sh
+    // turns that into one clean refusal. (A script, not inline awk: this cmd is
+    // wrapped in `bash -c '...'` and an awk program's quotes would break it.)
+    const needGB = Math.max(0, Math.round(Number(b.model.weightGB) || 0));
+    const MEMCHECK = "/home/eric/sparkDash/deploy/memcheck.sh";
+    // A dual brick holds weightGB on EVERY node, so guard both: memcheck is also
+    // what drops the page cache, and GLM's InstantTensor loader sizes its buffer
+    // from the MIN free memory across ranks — a cache-full worker alone failed
+    // the boot on 2026-09-24 ("buffer_size ... exceeds device memory budget").
+    const localGuard = `${MEMCHECK} ${needGB} || exit 1; `;
+    const remoteGuard = `\${ssh2} "${MEMCHECK} ${needGB}" || exit 1; `;
+    const memGuard =
+      needGB <= 0
+        ? ""
+        : b.model.placement === "dual"
+          ? localGuard + remoteGuard
+          : b.spec.target === "ssh"
+            ? remoteGuard
+            : localGuard;
+
     lines.push(`  "${served}":`);
-    lines.push(`    cmd: bash -c '${guard} || { ${startCmd}; }; ${keeper}'`);
-    // cmdStop is deliberately a NO-OP. llama-swap issues cmdStop for every
-    // *loaded* model when it reloads this file — and the composer rewrites this
-    // file on every Apply. A real stop command there therefore tears down
-    // models the composer just planned/started (observed: both spark2 servers
-    // shut down within 1s of "reloading configuration"). Lifecycle belongs to
-    // the composer, which owns the per-node memory budget; llama-swap only
-    // routes. `cmd` above stays idempotent (it attaches to an already-serving
-    // backend) so on-demand load still works.
-    lines.push("    cmdStop: /usr/bin/true");
-    if (stopCmd) lines.push(`    # composer stop (not used by llama-swap): ${stopCmd}`);
+    lines.push(`    cmd: bash -c '${guard} || { ${memGuard}${startCmd}; }; ${keeper}'`);
+    // A REAL cmdStop is required for on-demand swapping: llama-swap must be able
+    // to evict the loaded model before starting the requested one. Note the
+    // consequence — llama-swap also runs cmdStop for every loaded model when it
+    // reloads this file, and the composer rewrites it on every Apply, so an
+    // Apply unloads what is running. That is coherent in an on-demand fleet
+    // (the next request reloads), but it is why this was previously a no-op.
+    // Wrapped in `bash -c` because llama-swap execs without a shell, so a bare
+    // `VAR=x cmd` form would fail with "executable file not found".
+    lines.push(`    cmdStop: bash -c '${stopCmd || "true"}'`);
     lines.push(`    proxy: "${base}"`);
     lines.push("    checkEndpoint: /v1/models");
 
@@ -118,27 +173,37 @@ export function generateLlamaSwapConfig(catalog, assignment) {
     lines.push(`      placement: ${m.placement === "dual" ? "dual (both nodes, TP=2)" : "single"}`);
     lines.push("");
 
-    // Group by the node the brick physically serves on (its head node).
-    if (b.launchNode === "spark2") spark2Members.push(served);
-    else spark1Members.push(served);
+    // Whole-node models (dual TP=2, or a single brick whose floor claims most of
+    // the budget) conflict with everything, so each gets its own exclusive group.
+    // Everything else shares one co-resident group.
+    const budget = catalog.nodeBudgetGB(b.launchNode) || 113;
+    const wholeNode =
+      b.model.placement === "dual" || Number(b.model.weightGB) > budget * 0.75;
+    if (wholeNode) exclusiveMembers.push(served);
+    else sharedMembers.push(served);
   }
 
-  // swap:false = the node's assigned models CO-RESIDE (each on its own unique
-  // backend port; the composer's RAM check guarantees the set fits). llama-swap
-  // routes each request to the right backend by name and keeps them all loaded,
-  // so any RAM-fitting combination runs concurrently. (swap:true would evict
-  // siblings on each request — wrong for a validated simultaneous set.)
+  // On-demand swapping, LM Studio / Ollama style: a request for an unloaded
+  // model loads it, evicting whatever conflicts.
+  //   whole-node model -> own group, exclusive:true  => unloads every other group
+  //   co-residable set -> one group, swap:false      => they run together,
+  //                       exclusive:true             => but evict a whole-node model
+  // llama-swap's own default (no group) is swap+exclusive per model, which would
+  // forbid the co-residence the composer validates — hence the explicit groups.
   lines.push("groups:");
-  for (const [group, members] of [
-    ["spark1", spark1Members],
-    ["spark2", spark2Members],
-  ]) {
-    if (!members.length) continue;
-    lines.push(`  "${group}":`);
-    lines.push("    swap: false");
-    lines.push("    exclusive: false");
+  for (const served of exclusiveMembers) {
+    lines.push(`  "whole-node:${served}":`);
+    lines.push("    swap: true");
+    lines.push("    exclusive: true");
     lines.push("    members:");
-    for (const m of members) lines.push(`      - "${m}"`);
+    lines.push(`      - "${served}"`);
+  }
+  if (sharedMembers.length) {
+    lines.push('  "co-resident":');
+    lines.push("    swap: false");
+    lines.push("    exclusive: true");
+    lines.push("    members:");
+    for (const m of sharedMembers) lines.push(`      - "${m}"`);
   }
   lines.push("");
 
