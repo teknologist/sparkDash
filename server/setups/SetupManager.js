@@ -297,9 +297,40 @@ export class SetupManager {
       this._machine.activeSetupId !== id ||
       this._machine.phase !== phase ||
       this._machine.error !== (error || null);
+    const cameUp = phase === "running" && this._machine.phase !== "running";
     this._machine.phase = phase;
     this._machine.error = error || null;
     if (changed) this._emit(true);
+    // A setup that came up outside a switch (start.sh by hand, the composer's
+    // direct starts) is unknown to the gateway until something asks for it.
+    if (cameUp) await this._gatewayAdopt(this.getSetup(id));
+  }
+
+  /**
+   * Make llama-swap adopt a setup's served models. The gateway only lists
+   * models it started or adopted itself, and whatever follows its /running
+   * (Sparky, the composer's eviction) never sees a model started by a preset's
+   * script. Each generated gateway command first checks the upstream and only
+   * starts it when absent, so this request is a no-op for a serving model.
+   * Only called once the setup's endpoints answer: on a model that is not up
+   * this would make the gateway start it for real.
+   */
+  async _gatewayAdopt(setup) {
+    const served = (setup?.components || [])
+      .flatMap((c) => c.ready || [])
+      .map((ep) => ep.servedModel)
+      .filter(Boolean);
+    for (const name of served) {
+      try {
+        const res = await fetch(`${LLAMA_SWAP_URL}/upstream/${encodeURIComponent(name)}/v1/models`, {
+          signal: AbortSignal.timeout(30000),
+        });
+        if (!res.ok) this._appendLog(`[warn] gateway did not adopt ${name}: HTTP ${res.status}`);
+        else this._appendLog(`Gateway adopted ${name}.`);
+      } catch (e) {
+        this._appendLog(`[warn] gateway did not adopt ${name}: ${e.message}`);
+      }
+    }
   }
 
   /**
@@ -437,6 +468,7 @@ export class SetupManager {
       this._machine.error = null;
       this._setPhase("running");
       this._appendLog(`${this._name(setupId)} is running.`);
+      await this._gatewayAdopt(setup);
     } catch (err) {
       await this._handleActivateFailure(setup, previous, err);
     } finally {

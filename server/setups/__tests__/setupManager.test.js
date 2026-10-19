@@ -14,6 +14,11 @@ function mgrIn(phase, detected, { endpoints = [], gatewayStarting = null } = {})
       m._activeModels = m._machine.activeSetupId ? endpoints : [];
     },
     _gatewayLoadingSetupId: async () => gatewayStarting,
+    adopted: [],
+    _gatewayAdopt: async (setup) => {
+      m.adopted.push(setup?.id ?? null);
+    },
+    getSetup: (id) => ({ id }),
     _emit: () => {},
   });
   return m;
@@ -69,4 +74,22 @@ test("nothing detected and nothing starting is idle", async () => {
   await m._reconcile();
   assert.equal(m._machine.phase, "idle");
   assert.equal(m._machine.activeSetupId, null);
+});
+
+// Sparky and the composer's eviction follow llama-swap /running, which only
+// lists models the gateway started or adopted: a preset started by its own
+// script (or by hand) stayed invisible there until someone sent a request.
+test("a setup that comes up is adopted into the gateway once", async () => {
+  const ep = { host: "127.0.0.1", port: 8000, servedModel: "DeepSeek-V4.1-Flash-1017", up: true, modelId: null };
+  const m = mgrIn("loading", { activeSetupId: "deepseek-v4.1-1017", error: null }, { endpoints: [ep] });
+  await m._reconcile();
+  await m._reconcile();
+  assert.deepEqual(m.adopted, ["deepseek-v4.1-1017"]);
+});
+
+test("a setup still loading is not offered to the gateway", async () => {
+  const ep = { host: "127.0.0.1", port: 8000, servedModel: "DeepSeek-V4.1-Flash-1017", up: false, modelId: null };
+  const m = mgrIn("idle", { activeSetupId: "deepseek-v4.1-1017", error: null }, { endpoints: [ep] });
+  await m._reconcile();
+  assert.deepEqual(m.adopted, []);
 });
