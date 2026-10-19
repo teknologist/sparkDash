@@ -591,53 +591,60 @@
       }
     },
     {
-      "id": "deepseek-v4-flash-0731",
-      "displayName": "DeepSeek V4 Flash 0731 (dual TP=2)",
-      "backend": "vllm",
+      "id": "deepseek-v4.1-flash-1017",
+      "displayName": "DeepSeek V4.1 Flash 1017 (dual TP=2)",
+      "backend": "tensorfold",
       "placement": "dual",
       "nodes": [
         "spark1",
         "spark2"
       ],
-      "weightGB": 100,
+      "weightGB": 112,
+      "wholeNode": true,
       "port": 8000,
-      "servedModel": "deepseek-v4-flash-0731",
-      "notes": "0731 model (deepseek-ai/DeepSeek-V4-Flash-0731) NVFP4 + DSpark spec-decode, TP=2 over RoCE, ctx 1M. Whole-cluster (both nodes). vLLM via ~/deploy/dspark (upstream MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark, now a git checkout - upgrade with git pull) using .env.dspark.0731 (project deepseek-v4-flash-0731), pinned to DSPARK_REVISION=9e165c30. Cached on both nodes. To refresh: ENV_FILE=~/deploy/dspark/.env.dspark.0731 PREPARE_WORKER=0 ~/deploy/dspark/prepare-dspark-model-cache.sh --official --yes on spark1, then rsync the HF model dir to Spark2 over the fabric.",
+      "servedModel": "DeepSeek-V4.1-Flash-1017",
+      "container": "dsv41-1017-exl3-tf",
+      "peerContainers": {
+        "spark2": [
+          "dsv41-1017-exl3-tf"
+        ]
+      },
+      "notes": "MiaAI-Lab DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks @0e166b5 in ~/deploy/dsv41 (scripts/local.sh: WORKER=eric@10.100.72.1, FABRIC_PEER=10.100.72.1, PORT=8000, NFS_SERVER=10.100.72.2). TensorFold Zig engine, image ghcr.io/miaai-lab/deepseek-v4.1-flash-1017-2x-dgx-sparks-tensorfold:exl3-tp2-7c9bf5d36350 on both nodes. Checkpoint Mia-AiLab/DeepSeek-V4.1-Flash-1017-EXL3-EAQ-v1-2.9-bpw@6d54be4f + Engram shards of deepseek-ai/DeepSeek-V4.1-Flash-1017@1bae0e10 on spark1; rank 1 reads over NFS (volume dsv41-1017-exl3-hf) with its own Engram copy + rank-1 weight file under ~/.cache/dsv41-tensorfold on spark2. ~99 GiB weights per node, start.sh refuses below MIN_AVAIL_GIB=112 on either node; memguard kills a rank under 4 GiB. DSpark drafts, 1M ctx, PARALLEL 4, images on. Container dsv41-1017-exl3-tf on both nodes; no status subcommand (use /health). Replaced the vLLM DeepSeek-V4-Flash-0731 dual stack on 2026-10-19.",
       "maxContext": 1048576,
       "inputs": [
-        "text"
+        "text",
+        "image"
       ],
       "outputs": [
         "text"
       ],
-      "quant": "NVFP4",
-      "description": "DeepSeek V4 Flash 0731 NVFP4 across BOTH nodes (TP=2 over RoCE) with DSpark speculative decode. 1M context.",
+      "tools": true,
+      "quant": "EXL3 2.9bpw (TensorFold)",
+      "description": "DeepSeek V4.1 Flash 1017 EXL3 2.9bpw on TensorFold across BOTH nodes (TP=2 over RoCE) with DSpark drafts and Engram. 1M context, image input.",
       "launch": {
         "spark1": {
           "target": "local",
-          "startTimeoutMs": 1200000,
+          "cwd": "/home/eric/deploy/dsv41",
+          "startTimeoutMs": 1800000,
           "start": {
-            "cmd": "/home/eric/deepseek-v4-0731.sh",
-            "args": [
-              "start"
-            ]
+            "cmd": "/home/eric/deploy/dsv41/start.sh",
+            "args": []
           },
           "stop": {
-            "cmd": "/home/eric/deepseek-v4-0731.sh",
-            "args": [
-              "stop"
-            ]
+            "cmd": "/home/eric/deploy/dsv41/stop.sh",
+            "args": []
           },
           "status": {
-            "cmd": "/home/eric/deepseek-v4-0731.sh",
+            "cmd": "bash",
             "args": [
-              "status"
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8000/health >/dev/null 2>&1 && echo up || echo down"
             ]
           },
           "ready": {
             "host": "127.0.0.1",
             "port": 8000,
-            "servedModel": "deepseek-v4-flash-0731"
+            "servedModel": "DeepSeek-V4.1-Flash-1017"
           }
         }
       }
@@ -645,51 +652,52 @@
     {
       "id": "glm-5.3-flash-exl3",
       "displayName": "GLM-5.3 Flash EXL3 (dual TP=2)",
-      "backend": "vllm",
+      "backend": "tensorfold",
       "placement": "dual",
       "nodes": [
         "spark1",
         "spark2"
       ],
-      "weightGB": 104,
+      "weightGB": 110,
       "port": 8888,
       "servedModel": "GLM-5.3-Flash-EXL3",
-      "container": "glm53-exl3-head",
+      "container": "glm53-flash-tf",
       "peerContainers": {
         "spark2": [
-          "glm53-exl3-worker"
+          "glm53-flash-tf"
         ]
       },
-      "notes": "MiaAI-Lab GLM-5.3-Flash EXL3/TR3 4bpw (~164 GiB, 120 shards) split TP=2 over the CX7 fabric: spark1 head (10.100.72.2) + spark2 worker (10.100.72.1), both on enp1s0f1np1/rocep1s0f1. DFlash2 speculative decode. Upstream 1.6+ profile (synced 2026-09-24): :exl3-instanttensor image with the InstantTensor loader (~70 s cold load vs ~300 s), 850k ctx at util 0.85 with an explicit 14 GiB KV pool (--kv-cache-memory-bytes; without it 0.85 does not boot on the loader), fair v5 mixed-prefill, MNBT 7168. weightGB 104 = 0.85 x 121.69 GiB. Deployment tree at /home/eric/deploy/glm53 (own .env + overlay), so it is NOT vendored into deploy/. Backend port 8888.",
-      "maxContext": 850000,
+      "notes": "MiaAI-Lab GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold @3fd60df in ~/deploy/glm53-tf (scripts/local.sh: WORKER=eric@10.100.72.1, FABRIC_PEER=10.100.72.1, PORT=8888, DRAFTER=dflash2, WORKER_WEIGHTS=nfs). Image tensorfold-glm53:v0.6.0 (ghcr digest 14b5072e, patches e66c657a433d) on both nodes. Checkpoint Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold@078455ff on spark1 only; rank 1 reads it over NFS (docker volume glm53-hf). Container glm53-flash-tf on both nodes; needs ~110 GiB MemAvailable on EACH node; ~94 GiB on GPU per rank once loaded, KV/pool grows. First boot 2026-10-19: 421 s incl. kernel compile; ~59 tok/s single stream with thinking. start.sh returns once LIVE; stop.sh stops both ranks; no status subcommand (use /health). Replaced the vLLM EXL3/TR3 recipe (~/deploy/glm53) on 2026-10-19.",
+      "maxContext": 1048576,
       "inputs": [
-        "text"
+        "text",
+        "image",
+        "video"
       ],
       "outputs": [
         "text"
       ],
       "tools": true,
-      "quant": "EXL3/TR3 4bpw",
-      "description": "GLM-5.3 Flash, EXL3/TR3 4bpw across BOTH nodes (TP=2 over CX7) with DFlash2 speculative decode. 850k context.",
+      "quant": "EXL3 4bpw (TensorFold)",
+      "description": "GLM-5.3 Flash EXL3 4bpw on TensorFold across BOTH nodes (TP=2 over RoCE, two rails) with DFlash2 drafts. 1M context, image + video input.",
       "launch": {
         "spark1": {
           "target": "local",
-          "cwd": "/home/eric/deploy/glm53",
+          "cwd": "/home/eric/deploy/glm53-tf",
           "startTimeoutMs": 1800000,
           "start": {
-            "cmd": "/home/eric/deploy/glm53/start.sh",
+            "cmd": "/home/eric/deploy/glm53-tf/start.sh",
             "args": []
           },
           "stop": {
-            "cmd": "/home/eric/deploy/glm53/start.sh",
-            "args": [
-              "stop"
-            ]
+            "cmd": "/home/eric/deploy/glm53-tf/stop.sh",
+            "args": []
           },
           "status": {
-            "cmd": "/home/eric/deploy/glm53/start.sh",
+            "cmd": "bash",
             "args": [
-              "status"
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8888/health >/dev/null 2>&1 && echo up || echo down"
             ]
           },
           "ready": {
@@ -698,7 +706,8 @@
             "servedModel": "GLM-5.3-Flash-EXL3"
           }
         }
-      }
+      },
+      "wholeNode": true
     },
     {
       "id": "MiMo-V2.5-NVFP4",
@@ -855,11 +864,11 @@
         "spark1",
         "spark2"
       ],
-      "weightGB": 104,
+      "weightGB": 108,
       "port": 8007,
       "servedModel": "Qwen3.8-Flash-Next",
       "container": "qwen38-flash-next-tf",
-      "notes": "MiaAI-Lab Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold @364f21a in ~/deploy/qwen38-single on BOTH nodes (.env: PORT=8007). TensorFold Zig engine (tensorfold-qwen38:zig-db28187), INT4-AutoRound checkpoint azampatti/...@1464274 (~122 GiB), FP8 KV, vision on, 262k ctx, PARALLEL 8, MTP drafts. Needs ~92 GiB MemAvailable to start and then sizes its KV pool from MemAvailable minus 10 GiB, so it takes the WHOLE node: weightGB 104 until a measured peak replaces it (model-stats.json). Upstream: ~64 tok/s single stream, ~201 aggregate at 8. start.sh returns once LIVE; stop.sh removes the container. wholeNode: its KV cache grows into free memory while serving (to MemAvailable minus 10 GiB), so a measured idle peak must never shrink its claim.",
+      "notes": "MiaAI-Lab Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold @656879f in ~/deploy/qwen38-single (.env: PORT=8007). Image tensorfold-qwen38:zig-db28187 rebuilt locally 2026-10-19 (patch hash c0a2df4c680d, not published on ghcr). Checkpoint nvidia/Qwen3.8-Flash-Next-FP4-Local@b9ce18a6 (~96 GiB, ~81 GiB weights), FP8 KV, vision on, 262k ctx, PARALLEL 5, MTP drafts. Needs ~108 GiB MemAvailable to start (MEM_NEED_GIB) and sizes its pool from MemAvailable minus 10 GiB, so it takes the WHOLE node. Measured 2026-10-19: ~40 tok/s with thinking, 63-70 tok/s code with thinking off (upstream: 67.9 code / 48.5 prose single stream, ~150 at 5). start.sh returns once LIVE; stop.sh removes the container.",
       "maxContext": 262144,
       "inputs": [
         "text",
@@ -870,8 +879,8 @@
         "text"
       ],
       "tools": true,
-      "quant": "INT4 AutoRound (GPTQ)",
-      "description": "Qwen3.8 Flash Next (125B-A5B, INT4-AutoRound) on one Spark with TensorFold: MTP drafts, image + video input, 262k context.",
+      "quant": "NVFP4 (NVIDIA QAD)",
+      "description": "Qwen3.8 Flash Next (NVIDIA FP4 QAD checkpoint) on one Spark with TensorFold: MTP drafts, image + video input, 262k context.",
       "launch": {
         "spark1": {
           "target": "local",

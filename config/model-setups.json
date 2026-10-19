@@ -22,38 +22,38 @@
       ]
     },
     {
-      "id": "deepseek-v4-0731",
-      "name": "DeepSeek V4 Flash 0731 (dual)",
-      "description": "DeepSeek-V4-Flash-0731 · spark1 head + spark2 worker (TP=2, NVFP4 + DSpark)",
+      "id": "deepseek-v4.1-1017",
+      "name": "DeepSeek V4.1 Flash 1017 (dual)",
+      "description": "DeepSeek-V4.1-Flash-1017 EXL3 · spark1 head + spark2 worker (TP=2 TensorFold, DSpark drafts + Engram, 1M ctx)",
       "sparks": ["spark1", "spark2"],
       "startParallel": false,
-      "detect": { "localContainers": ["deepseek-v4-flash-0731"] },
+      "detect": { "localContainers": ["dsv41-1017-exl3-tf"] },
       "components": [
         {
-          "id": "deepseek-v4-0731",
+          "id": "deepseek-v4.1-1017",
           "target": "local",
-          "start": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/deepseek-v4-0731.sh", "args": ["status"] },
-          "startTimeoutMs": 1200000,
-          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-0731" }]
+          "start": { "cmd": "/home/eric/deploy/dsv41/start.sh", "args": [] },
+          "stop": { "cmd": "/home/eric/deploy/dsv41/stop.sh", "args": [] },
+          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8000/health >/dev/null 2>&1 && echo up || echo down"] },
+          "startTimeoutMs": 1800000,
+          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "DeepSeek-V4.1-Flash-1017" }]
         }
       ]
     },
     {
       "id": "glm-5.3-flash-exl3",
       "name": "GLM-5.3 Flash EXL3 (dual)",
-      "description": "GLM-5.3-Flash EXL3/TR3 4bpw · spark1 head + spark2 worker (TP=2 over CX7, DFlash2 spec-decode, 850k ctx)",
+      "description": "GLM-5.3-Flash EXL3 4bpw on TensorFold · spark1 head + spark2 worker (TP=2 over CX7, DFlash2 drafts, 1M ctx)",
       "sparks": ["spark1", "spark2"],
       "startParallel": false,
-      "detect": { "localContainers": ["glm53-exl3-head"] },
+      "detect": { "localContainers": ["glm53-flash-tf"] },
       "components": [
         {
           "id": "glm-5.3-flash-exl3",
           "target": "local",
-          "start": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": [] },
-          "stop": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/deploy/glm53/start.sh", "args": ["status"] },
+          "start": { "cmd": "/home/eric/deploy/glm53-tf/start.sh", "args": [] },
+          "stop": { "cmd": "/home/eric/deploy/glm53-tf/stop.sh", "args": [] },
+          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8888/health >/dev/null 2>&1 && echo up || echo down"] },
           "startTimeoutMs": 1800000,
           "ready": [{ "host": "127.0.0.1", "port": 8888, "servedModel": "GLM-5.3-Flash-EXL3" }]
         }
