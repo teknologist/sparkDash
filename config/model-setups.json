@@ -5,19 +5,48 @@
       "id": "mimo",
       "name": "MiMo-V2.5 (dual)",
       "description": "MiMo-V2.5 Omni · TP=2 over Ray across spark1 + spark2",
-      "sparks": ["spark1", "spark2"],
+      "sparks": [
+        "spark1",
+        "spark2"
+      ],
       "startParallel": false,
-      "detect": { "localContainers": ["mimo-nvfp4"] },
+      "detect": {
+        "localContainers": [
+          "mimo-nvfp4"
+        ]
+      },
       "components": [
         {
           "id": "mimo",
           "target": "local",
           "cwd": "/home/eric/deploy/mimo",
-          "start": { "cmd": "bash", "args": ["start.sh"] },
-          "stop": { "cmd": "bash", "args": ["stop.sh"] },
-          "status": { "cmd": "bash", "args": ["start.sh", "--check"] },
+          "start": {
+            "cmd": "bash",
+            "args": [
+              "start.sh"
+            ]
+          },
+          "stop": {
+            "cmd": "bash",
+            "args": [
+              "stop.sh"
+            ]
+          },
+          "status": {
+            "cmd": "bash",
+            "args": [
+              "start.sh",
+              "--check"
+            ]
+          },
           "startTimeoutMs": 1200000,
-          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "MiMo" }]
+          "ready": [
+            {
+              "host": "127.0.0.1",
+              "port": 8000,
+              "servedModel": "MiMo"
+            }
+          ]
         }
       ]
     },
@@ -25,18 +54,43 @@
       "id": "deepseek-v4.1-1017",
       "name": "DeepSeek V4.1 Flash 1017 (dual)",
       "description": "DeepSeek-V4.1-Flash-1017 EXL3 · spark1 head + spark2 worker (TP=2 TensorFold, DSpark drafts + Engram, 1M ctx)",
-      "sparks": ["spark1", "spark2"],
+      "sparks": [
+        "spark1",
+        "spark2"
+      ],
       "startParallel": false,
-      "detect": { "localContainers": ["dsv41-1017-exl3-tf"] },
+      "detect": {
+        "localContainers": [
+          "dsv41-1017-exl3-tf"
+        ]
+      },
       "components": [
         {
           "id": "deepseek-v4.1-1017",
           "target": "local",
-          "start": { "cmd": "/home/eric/deploy/dsv41/start.sh", "args": [] },
-          "stop": { "cmd": "/home/eric/deploy/dsv41/stop.sh", "args": [] },
-          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8000/health >/dev/null 2>&1 && echo up || echo down"] },
+          "start": {
+            "cmd": "/home/eric/deploy/dsv41/start.sh",
+            "args": []
+          },
+          "stop": {
+            "cmd": "/home/eric/deploy/dsv41/stop.sh",
+            "args": []
+          },
+          "status": {
+            "cmd": "bash",
+            "args": [
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8000/health >/dev/null 2>&1 && echo up || echo down"
+            ]
+          },
           "startTimeoutMs": 1800000,
-          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "DeepSeek-V4.1-Flash-1017" }]
+          "ready": [
+            {
+              "host": "127.0.0.1",
+              "port": 8000,
+              "servedModel": "DeepSeek-V4.1-Flash-1017"
+            }
+          ]
         }
       ]
     },
@@ -44,37 +98,43 @@
       "id": "glm-5.3-flash-exl3",
       "name": "GLM-5.3 Flash EXL3 (dual)",
       "description": "GLM-5.3-Flash EXL3 4bpw on TensorFold · spark1 head + spark2 worker (TP=2 over CX7, DFlash2 drafts, 1M ctx)",
-      "sparks": ["spark1", "spark2"],
+      "sparks": [
+        "spark1",
+        "spark2"
+      ],
       "startParallel": false,
-      "detect": { "localContainers": ["glm53-flash-tf"] },
+      "detect": {
+        "localContainers": [
+          "glm53-flash-tf"
+        ]
+      },
       "components": [
         {
           "id": "glm-5.3-flash-exl3",
           "target": "local",
-          "start": { "cmd": "/home/eric/deploy/glm53-tf/start.sh", "args": [] },
-          "stop": { "cmd": "/home/eric/deploy/glm53-tf/stop.sh", "args": [] },
-          "status": { "cmd": "bash", "args": ["-lc", "curl -fsS --max-time 4 http://127.0.0.1:8888/health >/dev/null 2>&1 && echo up || echo down"] },
+          "start": {
+            "cmd": "/home/eric/deploy/glm53-tf/start.sh",
+            "args": []
+          },
+          "stop": {
+            "cmd": "/home/eric/deploy/glm53-tf/stop.sh",
+            "args": []
+          },
+          "status": {
+            "cmd": "bash",
+            "args": [
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8888/health >/dev/null 2>&1 && echo up || echo down"
+            ]
+          },
           "startTimeoutMs": 1800000,
-          "ready": [{ "host": "127.0.0.1", "port": 8888, "servedModel": "GLM-5.3-Flash-EXL3" }]
-        }
-      ]
-    },
-    {
-      "id": "deepseek-v4-0731-entrpi",
-      "name": "DeepSeek V4 Flash 0731 (Entrpi 1-node)",
-      "description": "DeepSeek-V4-Flash-0731 IQ2/Q2K single-node on spark1 (Entrpi/ds4 fork + DSpark, in-RAM)",
-      "sparks": ["spark1"],
-      "startParallel": false,
-      "detect": { "endpoint": { "host": "127.0.0.1", "port": 8000, "matchModel": "deepseek-v4-flash" } },
-      "components": [
-        {
-          "id": "deepseek-v4-0731-entrpi",
-          "target": "local",
-          "start": { "cmd": "/home/eric/sparkDash/deploy/ds4-entrpi.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/sparkDash/deploy/ds4-entrpi.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/sparkDash/deploy/ds4-entrpi.sh", "args": ["status"] },
-          "startTimeoutMs": 600000,
-          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" }]
+          "ready": [
+            {
+              "host": "127.0.0.1",
+              "port": 8888,
+              "servedModel": "GLM-5.3-Flash-EXL3"
+            }
+          ]
         }
       ]
     },
@@ -82,18 +142,47 @@
       "id": "deepseek-v4-0731-solo",
       "name": "DeepSeek V4 Flash 0731 (SparkInfer 1-node)",
       "description": "DeepSeek-V4-Flash-0731 EXL3 3.0bpw (REAP-K216) single-node on spark1 (vLLM + SparkInfer, DSpark K5, 340k ctx @ util 0.93) - takes the whole node",
-      "sparks": ["spark1"],
+      "sparks": [
+        "spark1"
+      ],
       "startParallel": false,
-      "detect": { "endpoint": { "host": "127.0.0.1", "port": 8000, "matchModel": "deepseek-v4-flash-0731-solo" } },
+      "detect": {
+        "endpoint": {
+          "host": "127.0.0.1",
+          "port": 8000,
+          "matchModel": "deepseek-v4-flash-0731-solo"
+        }
+      },
       "components": [
         {
           "id": "deepseek-v4-0731-solo",
           "target": "local",
-          "start": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh", "args": ["status"] },
+          "start": {
+            "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh",
+            "args": [
+              "start"
+            ]
+          },
+          "stop": {
+            "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh",
+            "args": [
+              "stop"
+            ]
+          },
+          "status": {
+            "cmd": "/home/eric/sparkDash/deploy/ds4-one.sh",
+            "args": [
+              "status"
+            ]
+          },
           "startTimeoutMs": 3600000,
-          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash-0731-solo" }]
+          "ready": [
+            {
+              "host": "127.0.0.1",
+              "port": 8000,
+              "servedModel": "deepseek-v4-flash-0731-solo"
+            }
+          ]
         }
       ]
     },
@@ -101,96 +190,141 @@
       "id": "ornith-qwen",
       "name": "Ornith + Qwen (OCR+Extract)",
       "description": "Ornith-35B on spark1 · Qwen OCR+Extract on spark2",
-      "sparks": ["spark1", "spark2"],
-      "detect": { "localContainers": ["ornith-ornith-35b"] },
+      "sparks": [
+        "spark1",
+        "spark2"
+      ],
+      "detect": {
+        "localContainers": [
+          "ornith-ornith-35b"
+        ]
+      },
       "components": [
         {
           "id": "ornith-qwen",
           "target": "local",
-          "start": { "cmd": "/home/eric/ornith-qwen.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/ornith-qwen.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/ornith-qwen.sh", "args": ["status"] },
+          "start": {
+            "cmd": "/home/eric/ornith-qwen.sh",
+            "args": [
+              "start"
+            ]
+          },
+          "stop": {
+            "cmd": "/home/eric/ornith-qwen.sh",
+            "args": [
+              "stop"
+            ]
+          },
+          "status": {
+            "cmd": "/home/eric/ornith-qwen.sh",
+            "args": [
+              "status"
+            ]
+          },
           "startTimeoutMs": 900000,
           "ready": [
-            { "host": "127.0.0.1", "port": 8000, "servedModel": "ornith-35b" },
-            { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
-            { "host": "192.168.10.114", "port": 8001, "servedModel": "Qwen3.6-27B" }
+            {
+              "host": "127.0.0.1",
+              "port": 8000,
+              "servedModel": "ornith-35b"
+            },
+            {
+              "host": "192.168.10.114",
+              "port": 8000,
+              "servedModel": "qwen3-vl-ocr"
+            },
+            {
+              "host": "192.168.10.114",
+              "port": 8001,
+              "servedModel": "Qwen3.6-27B"
+            }
           ]
         }
       ]
     },
     {
-      "id": "ds4-laguna",
-      "name": "DeepSeek V4 Flash + Laguna",
-      "description": "DeepSeek-V4-Flash single-node on spark1 · Laguna-S-2.1 (DFlash spec-decode) on spark2",
-      "sparks": ["spark1", "spark2"],
-      "startParallel": true,
-      "detect": { "endpoint": { "host": "10.100.72.1", "port": 8000, "matchModel": "laguna" } },
+      "id": "qwen3.8-flash-next-dual",
+      "name": "Qwen3.8 Flash Next NVFP4 (dual)",
+      "description": "Qwen3.8-Flash-Next NVFP4 on TensorFold · spark1 head + spark2 worker (TP=2 over CX7, MTP drafts, 1M ctx)",
+      "sparks": [
+        "spark1",
+        "spark2"
+      ],
+      "startParallel": false,
+      "detect": {
+        "localContainers": [
+          "qwen38-fn-tf"
+        ]
+      },
       "components": [
         {
-          "id": "ds4",
+          "id": "qwen3.8-flash-next-dual",
           "target": "local",
-          "start": { "cmd": "/home/eric/ds4-solo.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/ds4-solo.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/ds4-solo.sh", "args": ["status"] },
-          "startTimeoutMs": 1200000,
-          "ready": [{ "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" }]
-        },
-        {
-          "id": "laguna",
-          "target": "ssh",
-          "host": "Spark2",
-          "cmd": "/home/eric/sparkDash/deploy/laguna/laguna-ctl.sh",
-          "env": { "ENABLE_SPEC": "1" },
-          "start": { "args": ["start"] },
-          "stop": { "args": ["stop"] },
-          "status": { "args": ["status"] },
-          "startTimeoutMs": 1200000,
-          "ready": [{ "host": "10.100.72.1", "port": 8000, "servedModel": "laguna-s" }]
-        }
-      ]
-    },
-    {
-      "id": "ds4-qwen",
-      "name": "DeepSeek V4 Flash + Qwen (OCR+Extract)",
-      "description": "DeepSeek-V4-Flash q2-imatrix single-node (300k ctx, in-RAM) on spark1 · Qwen OCR+Extract on spark2",
-      "sparks": ["spark1", "spark2"],
-      "detect": { "endpoint": { "host": "127.0.0.1", "port": 8000, "matchModel": "deepseek-v4" } },
-      "components": [
-        {
-          "id": "ds4-qwen",
-          "target": "local",
-          "start": { "cmd": "/home/eric/ds4-qwen.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/ds4-qwen.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/ds4-qwen.sh", "args": ["status"] },
-          "startTimeoutMs": 1200000,
+          "start": {
+            "cmd": "/home/eric/deploy/qwen38-dual/start.sh",
+            "args": []
+          },
+          "stop": {
+            "cmd": "/home/eric/deploy/qwen38-dual/stop.sh",
+            "args": []
+          },
+          "status": {
+            "cmd": "bash",
+            "args": [
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8008/v1/models >/dev/null 2>&1 && echo up || echo down"
+            ]
+          },
+          "startTimeoutMs": 1800000,
           "ready": [
-            { "host": "127.0.0.1", "port": 8000, "servedModel": "deepseek-v4-flash" },
-            { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
-            { "host": "192.168.10.114", "port": 8001, "servedModel": "Qwen3.6-27B" }
+            {
+              "host": "127.0.0.1",
+              "port": 8008,
+              "servedModel": "Qwen3.8-Flash-Next-Dual"
+            }
           ]
         }
       ]
     },
     {
-      "id": "laguna-qwen",
-      "name": "Laguna + Qwen (OCR+Extract)",
-      "description": "Laguna-S-2.1 (DFlash spec-decode) on spark1 · Qwen OCR+Extract on spark2",
-      "sparks": ["spark1", "spark2"],
-      "detect": { "localContainers": ["laguna-s"] },
+      "id": "qwen3.8-flash-next",
+      "name": "Qwen3.8 Flash Next FP4 (single)",
+      "description": "Qwen3.8-Flash-Next FP4 on TensorFold · spark1 only, takes the whole node",
+      "sparks": [
+        "spark1"
+      ],
+      "startParallel": false,
+      "detect": {
+        "localContainers": [
+          "qwen38-flash-next-tf"
+        ]
+      },
       "components": [
         {
-          "id": "laguna-qwen",
+          "id": "qwen3.8-flash-next",
           "target": "local",
-          "env": { "ENABLE_SPEC": "1" },
-          "start": { "cmd": "/home/eric/laguna-qwen.sh", "args": ["start"] },
-          "stop": { "cmd": "/home/eric/laguna-qwen.sh", "args": ["stop"] },
-          "status": { "cmd": "/home/eric/laguna-qwen.sh", "args": ["status"] },
-          "startTimeoutMs": 900000,
+          "start": {
+            "cmd": "/home/eric/deploy/qwen38-single/start.sh",
+            "args": []
+          },
+          "stop": {
+            "cmd": "/home/eric/deploy/qwen38-single/stop.sh",
+            "args": []
+          },
+          "status": {
+            "cmd": "bash",
+            "args": [
+              "-lc",
+              "curl -fsS --max-time 4 http://127.0.0.1:8007/v1/models >/dev/null 2>&1 && echo up || echo down"
+            ]
+          },
+          "startTimeoutMs": 1800000,
           "ready": [
-            { "host": "127.0.0.1", "port": 8000, "servedModel": "laguna-s" },
-            { "host": "192.168.10.114", "port": 8000, "servedModel": "qwen3-vl-ocr" },
-            { "host": "192.168.10.114", "port": 8001, "servedModel": "Qwen3.6-27B" }
+            {
+              "host": "127.0.0.1",
+              "port": 8007,
+              "servedModel": "Qwen3.8-Flash-Next"
+            }
           ]
         }
       ]

@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { execFile, spawn } from "child_process";
-import { MODEL_SETUPS_PATH, SETUP_LOGS_DIR } from "../config.js";
+import { LLAMA_SWAP_URL, MODEL_SETUPS_PATH, SETUP_LOGS_DIR } from "../config.js";
 import { childEnv } from "./childEnv.js";
 
 /**
@@ -41,7 +41,7 @@ export class SetupManager {
     // Fleet state machine. `phase` transitions during a switch; when idle the
     // detection loop keeps activeSetupId/phase in sync with reality.
     this._machine = {
-      phase: "idle", // idle | starting | stopping | running | failed | unknown
+      phase: "idle", // idle | loading | starting | stopping | running | failed | unknown
       activeSetupId: null,
       targetSetupId: null,
       error: null,
@@ -63,12 +63,18 @@ export class SetupManager {
     this._lastEmit = 0;
 
     // Prime detection once, then keep it fresh on a slow loop.
-    void this._reconcile();
-    void this._refreshActiveModels();
-    this._detectTimer = setInterval(() => {
-      void this._reconcile();
-      void this._refreshActiveModels();
-    }, DETECT_LOOP_MS);
+    void this._tick();
+    this._detectTimer = setInterval(() => void this._tick(), DETECT_LOOP_MS);
+  }
+
+  /**
+   * One detection round. Idle: reconcile (which refreshes the active setup's
+   * endpoints itself, since the phase depends on them). During a switch the
+   * job owns the phase, so only the target's endpoints are refreshed.
+   */
+  async _tick() {
+    if (this._transitioning) await this._refreshActiveModels();
+    else await this._reconcile();
   }
 
   /** Clear timers and kill any in-flight job children (graceful shutdown). */
@@ -274,15 +280,59 @@ export class SetupManager {
     // another way (composer, gateway, a retry), and the pill kept saying
     // "No model running" in red over a serving GLM.
     if (this._machine.phase === "failed" && !activeSetupId) return;
-    const phase = error ? "unknown" : activeSetupId ? "running" : "idle";
+    // Nothing detected on the host yet, but the gateway may already be bringing
+    // a setup up (memcheck, image pull, worker launch all run before its
+    // container exists): report that setup as loading rather than "idle".
+    const gatewayId = !activeSetupId && !error ? await this._gatewayLoadingSetupId() : null;
+    if (this._transitioning) return;
+    const id = activeSetupId || gatewayId;
+    // The phase depends on the setup's endpoints, so refresh them for `id` now
+    // rather than on the loop's next pass.
+    this._machine.activeSetupId = id;
+    await this._refreshActiveModels();
+    if (this._transitioning) return;
+    let phase = error ? "unknown" : id ? "running" : "idle";
+    if (phase === "running" && (gatewayId || !this._activeModelsReady())) phase = "loading";
     const changed =
-      this._machine.activeSetupId !== activeSetupId ||
+      this._machine.activeSetupId !== id ||
       this._machine.phase !== phase ||
       this._machine.error !== (error || null);
-    this._machine.activeSetupId = activeSetupId;
     this._machine.phase = phase;
     this._machine.error = error || null;
     if (changed) this._emit(true);
+  }
+
+  /**
+   * True once every declared `ready` endpoint of the active setup answers.
+   * A setup that declares none is ready as soon as it is detected; the model
+   * may still be loading weights until then, hence the `loading` phase.
+   */
+  _activeModelsReady() {
+    return this._activeModels.every((m) => m.up);
+  }
+
+  /**
+   * Id of a setup whose served model llama-swap reports as `starting`, or
+   * null. Only the served names declared under components[].ready are matched,
+   * so a gateway model that belongs to no preset never surfaces here.
+   * @returns {Promise<string|null>}
+   */
+  async _gatewayLoadingSetupId() {
+    let starting = [];
+    try {
+      const res = await fetch(`${LLAMA_SWAP_URL}/running`, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return null;
+      const d = await res.json().catch(() => null);
+      starting = (d?.running || []).filter((r) => r?.model && r.state === "starting").map((r) => r.model);
+    } catch {
+      return null;
+    }
+    if (!starting.length) return null;
+    for (const setup of this._setups) {
+      const served = (setup.components || []).flatMap((c) => c.ready || []).map((ep) => ep.servedModel);
+      if (served.some((s) => s && starting.includes(s))) return setup.id;
+    }
+    return null;
   }
 
   /**

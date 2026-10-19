@@ -6,11 +6,12 @@ interface ModelSetupPillProps {
   onClick?: () => void;
 }
 
-/** Dot colour per phase — green running, amber transitioning, red failed/unknown, grey idle. */
+/** Dot colour per phase — green running, amber loading/transitioning, red failed/unknown, grey idle. */
 function phaseDotClass(phase: ModelSetupsState["phase"] | undefined): string {
   switch (phase) {
     case "running":
       return "bg-success";
+    case "loading":
     case "starting":
     case "stopping":
       return "bg-warning animate-pulse";
@@ -22,11 +23,13 @@ function phaseDotClass(phase: ModelSetupsState["phase"] | undefined): string {
   }
 }
 
-/** Short phase word shown while a switch is in flight. */
+/** Short phase word shown while a switch is in flight or a model is still loading. */
 function transitionLabel(state: ModelSetupsState): string | null {
   const target = state.setups.find((s) => s.id === state.targetSetupId);
+  const active = state.setups.find((s) => s.id === state.activeSetupId);
   if (state.phase === "stopping") return "Stopping…";
   if (state.phase === "starting") return target ? `Starting ${target.name}…` : "Starting…";
+  if (state.phase === "loading") return active ? `Loading ${active.name}…` : "Loading…";
   return null;
 }
 

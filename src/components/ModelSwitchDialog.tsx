@@ -167,6 +167,11 @@ export function ModelSwitchDialog({ open, onClose, state }: ModelSwitchDialogPro
                           RUNNING
                         </span>
                       )}
+                      {isActive && state?.phase === "loading" && (
+                        <span className="rounded-full bg-warning/20 px-1.5 py-0.5 text-[9px] font-medium text-warning">
+                          LOADING
+                        </span>
+                      )}
                       {isTarget && busy && (
                         <span className="rounded-full bg-warning/20 px-1.5 py-0.5 text-[9px] font-medium text-warning">
                           STARTING

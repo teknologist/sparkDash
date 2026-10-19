@@ -1197,6 +1197,8 @@ export interface ModelSetup {
 
 export type ModelSetupPhase =
   | "idle"
+  /** A setup is detected (or the gateway is starting it) but its endpoints do not answer yet. */
+  | "loading"
   | "starting"
   | "stopping"
   | "running"
