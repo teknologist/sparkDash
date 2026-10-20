@@ -88,7 +88,7 @@
             {
               "host": "127.0.0.1",
               "port": 8000,
-              "servedModel": "DeepSeek-V4.1-Flash-1017"
+              "servedModel": "DeepSeek-V4.1-Flash"
             }
           ]
         }

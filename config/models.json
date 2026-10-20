@@ -602,14 +602,14 @@
       "weightGB": 112,
       "wholeNode": true,
       "port": 8000,
-      "servedModel": "DeepSeek-V4.1-Flash-1017",
+      "servedModel": "DeepSeek-V4.1-Flash",
       "container": "dsv41-1017-exl3-tf",
       "peerContainers": {
         "spark2": [
           "dsv41-1017-exl3-tf"
         ]
       },
-      "notes": "MiaAI-Lab DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks @0e166b5 in ~/deploy/dsv41 (scripts/local.sh: WORKER=eric@10.100.72.1, FABRIC_PEER=10.100.72.1, PORT=8000, NFS_SERVER=10.100.72.2). TensorFold Zig engine, image ghcr.io/miaai-lab/deepseek-v4.1-flash-1017-2x-dgx-sparks-tensorfold:exl3-tp2-7c9bf5d36350 on both nodes. Checkpoint Mia-AiLab/DeepSeek-V4.1-Flash-1017-EXL3-EAQ-v1-2.9-bpw@6d54be4f + Engram shards of deepseek-ai/DeepSeek-V4.1-Flash-1017@1bae0e10 on spark1; rank 1 reads over NFS (volume dsv41-1017-exl3-hf) with its own Engram copy + rank-1 weight file under ~/.cache/dsv41-tensorfold on spark2. ~99 GiB weights per node, start.sh refuses below MIN_AVAIL_GIB=112 on either node; memguard kills a rank under 4 GiB. DSpark drafts, 1M ctx, PARALLEL 4, images on. Container dsv41-1017-exl3-tf on both nodes; no status subcommand (use /health). Replaced the vLLM DeepSeek-V4-Flash-0731 dual stack on 2026-10-19.",
+      "notes": "MiaAI-Lab DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks @0e166b5 in ~/deploy/dsv41 (scripts/local.sh: WORKER=eric@10.100.72.1, FABRIC_PEER=10.100.72.1, PORT=8000, NFS_SERVER=10.100.72.2). TensorFold Zig engine, image ghcr.io/miaai-lab/deepseek-v4.1-flash-1017-2x-dgx-sparks-tensorfold:exl3-tp2-7c9bf5d36350 on both nodes. Checkpoint Mia-AiLab/DeepSeek-V4.1-Flash-1017-EXL3-EAQ-v1-2.9-bpw@6d54be4f + Engram shards of deepseek-ai/DeepSeek-V4.1-Flash-1017@1bae0e10 on spark1; rank 1 reads over NFS (volume dsv41-1017-exl3-hf) with its own Engram copy + rank-1 weight file under ~/.cache/dsv41-tensorfold on spark2. ~99 GiB weights per node, start.sh refuses below MIN_AVAIL_GIB=112 on either node; memguard kills a rank under 4 GiB. DSpark drafts, 1M ctx, PARALLEL 4, images on. Container dsv41-1017-exl3-tf on both nodes; no status subcommand (use /health). Replaced the vLLM DeepSeek-V4-Flash-0731 dual stack on 2026-10-19. Served name is DeepSeek-V4.1-Flash (no build tag: scripts/local.sh SERVED_NAME) so clients and LiteLLM survive a checkpoint upgrade; only the sparkDash names carry 1017.",
       "maxContext": 1048576,
       "inputs": [
         "text",
@@ -644,10 +644,11 @@
           "ready": {
             "host": "127.0.0.1",
             "port": 8000,
-            "servedModel": "DeepSeek-V4.1-Flash-1017"
+            "servedModel": "DeepSeek-V4.1-Flash"
           }
         }
-      }
+      },
+      "swapPriority": 10
     },
     {
       "id": "glm-5.3-flash-exl3",
